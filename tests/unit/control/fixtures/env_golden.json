@@ -1,0 +1,308 @@
+{
+  "source": "16a4689",
+  "environ": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/home/t",
+    "LANG": "C.UTF-8"
+  },
+  "pairs": [
+    "console:web",
+    "alpha:bot",
+    "alpha:api",
+    "beta:api"
+  ],
+  "scenarios": {
+    "A": {
+      "files": {
+        ".env": {
+          "SERVICE_CLIENT_ID": "a",
+          "SERVICE_CLIENT_SECRET": "b",
+          "IS_TEST": "true",
+          "ALPHA_MODE": "m",
+          "ALPHA_DRY_RUN": "false",
+          "ALPHA_CONFIG_PATH": "evil",
+          "ALPHA_WEB_DATA_DIR": "d",
+          "BETA_DATA_DIR": "r",
+          "BETA_USER_AGENT": "u",
+          "MESSENGER_BOT_TOKEN": "t",
+          "MESSENGER_CHAT_ID": "1",
+          "IBKR_HOST": "h",
+          "IBKR_PORT": "7497",
+          "IBKR_ACCOUNT": "DU0",
+          "IBKR_ALLOW_LIVE_TRADING": "true",
+          "IBKR_WRITABLE": "true",
+          "TBOT_FOO": "1",
+          "OTHER": "x"
+        },
+        ".env.alpha": {
+          "ALPHA_CONFIG_PATH": "evil",
+          "SERVICE_CLIENT_ID": "alpha"
+        }
+      },
+      "results": {
+        "console:web": {
+          "env": {
+            "HOME": "/home/t",
+            "LANG": "C.UTF-8",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONFAULTHANDLER": "1",
+            "PYTHONUNBUFFERED": "1",
+            "TBOT_PORT": "8420",
+            "TBOT_ROOT": "<root>",
+            "TBOT_UNIT": "console"
+          },
+          "dropped": [
+            "ALPHA_CONFIG_PATH",
+            "ALPHA_DRY_RUN",
+            "ALPHA_MODE",
+            "ALPHA_WEB_DATA_DIR",
+            "IBKR_ALLOW_LIVE_TRADING",
+            "IBKR_WRITABLE"
+          ]
+        },
+        "alpha:bot": {
+          "env": {
+            "ALPHA_CONFIG_PATH": "config/alpha.json",
+            "BETA_DATA_DIR": "r",
+            "BETA_USER_AGENT": "u",
+            "HOME": "/home/t",
+            "IBKR_ACCOUNT": "DU0",
+            "IBKR_HOST": "h",
+            "IBKR_PORT": "7497",
+            "IS_TEST": "true",
+            "LANG": "C.UTF-8",
+            "MESSENGER_BOT_TOKEN": "t",
+            "MESSENGER_CHAT_ID": "1",
+            "OTHER": "x",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONFAULTHANDLER": "1",
+            "PYTHONUNBUFFERED": "1",
+            "SERVICE_CLIENT_ID": "alpha",
+            "SERVICE_CLIENT_SECRET": "b",
+            "TBOT_FOO": "1",
+            "TBOT_ROOT": "<root>",
+            "TBOT_UNIT": "alpha"
+          },
+          "dropped": [
+            "ALPHA_CONFIG_PATH",
+            "ALPHA_DRY_RUN",
+            "ALPHA_MODE",
+            "ALPHA_WEB_DATA_DIR",
+            "IBKR_ALLOW_LIVE_TRADING",
+            "IBKR_WRITABLE"
+          ]
+        },
+        "alpha:api": {
+          "env": {
+            "ALPHA_CONFIG_PATH": "config/alpha.json",
+            "BETA_DATA_DIR": "r",
+            "BETA_USER_AGENT": "u",
+            "HOME": "/home/t",
+            "IBKR_ACCOUNT": "DU0",
+            "IBKR_HOST": "h",
+            "IBKR_PORT": "7497",
+            "IS_TEST": "true",
+            "LANG": "C.UTF-8",
+            "MESSENGER_BOT_TOKEN": "t",
+            "MESSENGER_CHAT_ID": "1",
+            "OTHER": "x",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONFAULTHANDLER": "1",
+            "PYTHONUNBUFFERED": "1",
+            "SERVICE_CLIENT_ID": "alpha",
+            "SERVICE_CLIENT_SECRET": "b",
+            "TBOT_FOO": "1",
+            "TBOT_PORT": "18601",
+            "TBOT_ROOT": "<root>",
+            "TBOT_UNIT": "alpha"
+          },
+          "dropped": [
+            "ALPHA_CONFIG_PATH",
+            "ALPHA_DRY_RUN",
+            "ALPHA_MODE",
+            "ALPHA_WEB_DATA_DIR",
+            "IBKR_ALLOW_LIVE_TRADING",
+            "IBKR_WRITABLE"
+          ]
+        },
+        "beta:api": {
+          "env": {
+            "BETA_DATA_DIR": "r",
+            "BETA_USER_AGENT": "u",
+            "HOME": "/home/t",
+            "IBKR_HOST": "h",
+            "IBKR_PORT": "7497",
+            "LANG": "C.UTF-8",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONFAULTHANDLER": "1",
+            "PYTHONUNBUFFERED": "1",
+            "TBOT_PORT": "18602",
+            "TBOT_ROOT": "<root>",
+            "TBOT_UNIT": "beta"
+          },
+          "dropped": [
+            "ALPHA_CONFIG_PATH",
+            "ALPHA_DRY_RUN",
+            "ALPHA_MODE",
+            "ALPHA_WEB_DATA_DIR",
+            "IBKR_ALLOW_LIVE_TRADING",
+            "IBKR_WRITABLE"
+          ]
+        }
+      }
+    },
+    "B": {
+      "files": {
+        ".env": {
+          "SERVICE_CLIENT_ID": "a",
+          "SERVICE_CLIENT_SECRET": "b",
+          "IS_TEST": "true",
+          "ALPHA_MODE": "m",
+          "ALPHA_DRY_RUN": "false",
+          "ALPHA_CONFIG_PATH": "evil",
+          "ALPHA_WEB_DATA_DIR": "d",
+          "BETA_DATA_DIR": "r",
+          "BETA_USER_AGENT": "u",
+          "MESSENGER_BOT_TOKEN": "t",
+          "MESSENGER_CHAT_ID": "1",
+          "IBKR_HOST": "h",
+          "IBKR_PORT": "7497",
+          "IBKR_ACCOUNT": "DU0",
+          "IBKR_ALLOW_LIVE_TRADING": "true",
+          "IBKR_WRITABLE": "true",
+          "TBOT_FOO": "1",
+          "OTHER": "x",
+          "TBOT_WEB_TOKEN": "t0ken",
+          "TBOT_WEB_HOST": "0.0.0.0",
+          "TBOT_WEB_ALLOWED_HOSTS": "nas.local"
+        },
+        ".env.alpha": {
+          "ALPHA_CONFIG_PATH": "evil",
+          "SERVICE_CLIENT_ID": "alpha"
+        }
+      },
+      "results": {
+        "console:web": {
+          "env": {
+            "HOME": "/home/t",
+            "LANG": "C.UTF-8",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONFAULTHANDLER": "1",
+            "PYTHONUNBUFFERED": "1",
+            "TBOT_PORT": "8420",
+            "TBOT_ROOT": "<root>",
+            "TBOT_UNIT": "console",
+            "TBOT_WEB_TOKEN": "t0ken"
+          },
+          "dropped": [
+            "ALPHA_CONFIG_PATH",
+            "ALPHA_DRY_RUN",
+            "ALPHA_MODE",
+            "ALPHA_WEB_DATA_DIR",
+            "IBKR_ALLOW_LIVE_TRADING",
+            "IBKR_WRITABLE",
+            "TBOT_WEB_ALLOWED_HOSTS",
+            "TBOT_WEB_HOST"
+          ]
+        },
+        "alpha:bot": {
+          "env": {
+            "ALPHA_CONFIG_PATH": "config/alpha.json",
+            "BETA_DATA_DIR": "r",
+            "BETA_USER_AGENT": "u",
+            "HOME": "/home/t",
+            "IBKR_ACCOUNT": "DU0",
+            "IBKR_HOST": "h",
+            "IBKR_PORT": "7497",
+            "IS_TEST": "true",
+            "LANG": "C.UTF-8",
+            "MESSENGER_BOT_TOKEN": "t",
+            "MESSENGER_CHAT_ID": "1",
+            "OTHER": "x",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONFAULTHANDLER": "1",
+            "PYTHONUNBUFFERED": "1",
+            "SERVICE_CLIENT_ID": "alpha",
+            "SERVICE_CLIENT_SECRET": "b",
+            "TBOT_FOO": "1",
+            "TBOT_ROOT": "<root>",
+            "TBOT_UNIT": "alpha",
+            "TBOT_WEB_TOKEN": "t0ken"
+          },
+          "dropped": [
+            "ALPHA_CONFIG_PATH",
+            "ALPHA_DRY_RUN",
+            "ALPHA_MODE",
+            "ALPHA_WEB_DATA_DIR",
+            "IBKR_ALLOW_LIVE_TRADING",
+            "IBKR_WRITABLE",
+            "TBOT_WEB_ALLOWED_HOSTS",
+            "TBOT_WEB_HOST"
+          ]
+        },
+        "alpha:api": {
+          "env": {
+            "ALPHA_CONFIG_PATH": "config/alpha.json",
+            "BETA_DATA_DIR": "r",
+            "BETA_USER_AGENT": "u",
+            "HOME": "/home/t",
+            "IBKR_ACCOUNT": "DU0",
+            "IBKR_HOST": "h",
+            "IBKR_PORT": "7497",
+            "IS_TEST": "true",
+            "LANG": "C.UTF-8",
+            "MESSENGER_BOT_TOKEN": "t",
+            "MESSENGER_CHAT_ID": "1",
+            "OTHER": "x",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONFAULTHANDLER": "1",
+            "PYTHONUNBUFFERED": "1",
+            "SERVICE_CLIENT_ID": "alpha",
+            "SERVICE_CLIENT_SECRET": "b",
+            "TBOT_FOO": "1",
+            "TBOT_PORT": "18601",
+            "TBOT_ROOT": "<root>",
+            "TBOT_UNIT": "alpha",
+            "TBOT_WEB_TOKEN": "t0ken"
+          },
+          "dropped": [
+            "ALPHA_CONFIG_PATH",
+            "ALPHA_DRY_RUN",
+            "ALPHA_MODE",
+            "ALPHA_WEB_DATA_DIR",
+            "IBKR_ALLOW_LIVE_TRADING",
+            "IBKR_WRITABLE",
+            "TBOT_WEB_ALLOWED_HOSTS",
+            "TBOT_WEB_HOST"
+          ]
+        },
+        "beta:api": {
+          "env": {
+            "BETA_DATA_DIR": "r",
+            "BETA_USER_AGENT": "u",
+            "HOME": "/home/t",
+            "IBKR_HOST": "h",
+            "IBKR_PORT": "7497",
+            "LANG": "C.UTF-8",
+            "PATH": "/usr/bin:/bin",
+            "PYTHONFAULTHANDLER": "1",
+            "PYTHONUNBUFFERED": "1",
+            "TBOT_PORT": "18602",
+            "TBOT_ROOT": "<root>",
+            "TBOT_UNIT": "beta"
+          },
+          "dropped": [
+            "ALPHA_CONFIG_PATH",
+            "ALPHA_DRY_RUN",
+            "ALPHA_MODE",
+            "ALPHA_WEB_DATA_DIR",
+            "IBKR_ALLOW_LIVE_TRADING",
+            "IBKR_WRITABLE",
+            "TBOT_WEB_ALLOWED_HOSTS",
+            "TBOT_WEB_HOST"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+.venv/
+/run/
+/logs/
+.env
+.env.*
+!.env.example
+/config/workspace.json
+/js/api.js
+/js/dom.js
+/js/util.js
+/js/tooltip.js
+/js/globals.d.ts
+/js/units/contract.d.ts
+/js/require-tests.mjs

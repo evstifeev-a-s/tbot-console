@@ -1,0 +1,18 @@
+{
+  "enabledPlugins": {
+    "pyright-lsp@claude-plugins-official": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/check_docs.py\" --hook",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

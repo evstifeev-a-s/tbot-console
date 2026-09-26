@@ -1,0 +1,4 @@
+src/tbot_console/web/static/**    text eol=lf
+tests/fixtures/unit_repo/js/**    text eol=lf
+tests/web/**                      text eol=lf
+playwright.config.js              text eol=lf

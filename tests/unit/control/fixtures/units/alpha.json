@@ -1,0 +1,36 @@
+{
+  "id": "alpha",
+  "kind": "strategy",
+  "title": "Альфа",
+  "glyph": "А",
+  "sub": "вымышленная стратегия с заявками",
+  "order": 10,
+  "ui": "alpha",
+  "legacy_pages": ["old-page"],
+  "places_orders": true,
+  "api": {"process": "api", "port": 18601},
+  "env_files_ignore": {"prefixes": ["ALPHA_"]},
+  "processes": {
+    "bot": {
+      "title": "Торговый бот",
+      "module": "alpha_unit.bot",
+      "env": {"ALPHA_CONFIG_PATH": "config/alpha.json"},
+      "env_files": [".env", ".env.alpha"],
+      "keep_awake": "system",
+      "autostart": false,
+      "stop_timeout_s": 120,
+      "check": true,
+      "confirm": "Альфа сама ставит заявки: пока бот остановлен, открытая позиция остаётся без присмотра.",
+      "ready": {"kind": "descriptor", "timeout_s": 120}
+    },
+    "api": {
+      "title": "Служба консоли",
+      "module": "alpha_unit.api",
+      "env": {"ALPHA_CONFIG_PATH": "config/alpha.json"},
+      "env_files": [".env", ".env.alpha"],
+      "autostart": true,
+      "stop_timeout_s": 30,
+      "ready": {"kind": "http", "timeout_s": 60}
+    }
+  }
+}

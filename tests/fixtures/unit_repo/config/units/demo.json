@@ -1,0 +1,18 @@
+{
+  "id": "demo",
+  "kind": "monitor",
+  "title": "Демо",
+  "glyph": "Д",
+  "ui": "demo",
+  "api": {"process": "api", "port": 18603},
+  "env_files_only": {"prefixes": ["DEMO_"]},
+  "processes": {
+    "api": {
+      "title": "Служба демо",
+      "module": "demo_unit.webapp",
+      "env_files": [".env"],
+      "autostart": true,
+      "ready": {"kind": "http", "timeout_s": 30}
+    }
+  }
+}

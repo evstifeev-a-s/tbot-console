@@ -1,0 +1,43 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.2.0/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": [
+      "src/tbot_console/web/static/**",
+      "tests/web/**",
+      "tests/fixtures/unit_repo/js/**",
+      "playwright.config.js",
+      "!**/vendor/**"
+    ]
+  },
+  "javascript": {
+    "globals": ["LightweightCharts"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.d.ts"],
+      "linter": { "rules": { "suspicious": { "noExplicitAny": "off" } } }
+    }
+  ],
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "noUndeclaredVariables": "error",
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error"
+      },
+      "suspicious": {
+        "noDoubleEquals": { "level": "error", "options": { "ignoreNull": true } },
+        "noFallthroughSwitchClause": "error"
+      }
+    }
+  }
+}

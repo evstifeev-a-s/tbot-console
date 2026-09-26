@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "tbot-web-demo",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "TBOT_ROOT=tests/fixtures/unit_repo",
+        "TBOT_WEB_PORT=18420",
+        "uv",
+        "run",
+        "tbot-web"
+      ],
+      "port": 18420
+    }
+  ]
+}

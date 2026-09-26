@@ -1,0 +1,22 @@
+{
+  "id": "beta",
+  "kind": "monitor",
+  "title": "Бета",
+  "glyph": "Б",
+  "sub": "вымышленный монитор · только чтение",
+  "order": 20,
+  "ui": "beta",
+  "places_orders": false,
+  "api": {"process": "api", "port": 18602},
+  "env_files_only": {"prefixes": ["BETA_"], "keys": ["IBKR_HOST", "IBKR_PORT", "IBKR_CLIENT_ID"]},
+  "processes": {
+    "api": {
+      "title": "Служба беты",
+      "module": "beta_unit.webapp",
+      "env_files": [".env"],
+      "autostart": true,
+      "stop_timeout_s": 20,
+      "ready": {"kind": "http", "timeout_s": 60}
+    }
+  }
+}

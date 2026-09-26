@@ -1,0 +1,21 @@
+{
+  "name": "tbot-console",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev-only toolchain for the tbot-console static frontend (no runtime deps, no bundler).",
+  "scripts": {
+    "lint": "biome check src/tbot_console/web/static tests/web tests/fixtures/unit_repo/js playwright.config.js",
+    "lint:fix": "biome check --write src/tbot_console/web/static tests/web tests/fixtures/unit_repo/js playwright.config.js",
+    "format": "biome format --write src/tbot_console/web/static tests/web tests/fixtures/unit_repo/js playwright.config.js",
+    "typecheck": "tsc -p jsconfig.json",
+    "test": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./src/tbot_console/web/static/js/require-tests.mjs --test-reporter-destination=stderr 'src/tbot_console/web/static/js/**/*.test.js'",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='src/tbot_console/web/static/js/util.js' --test-coverage-branches=90 'src/tbot_console/web/static/js/**/*.test.js'",
+    "smoke": "playwright test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.0",
+    "@playwright/test": "1.62.0",
+    "typescript": "5.7.2"
+  }
+}

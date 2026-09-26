@@ -1,0 +1,91 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: check-json
+      - id: mixed-line-ending
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy [src]
+        entry: uv run mypy src/
+        language: system
+        files: ^src/.*\.py$
+        pass_filenames: false
+      - id: docs-gate
+        name: docs gate (README coverage, links, AGENTS.md adapters)
+        entry: python3 scripts/check_docs.py
+        language: system
+        files: ^(src/.*\.py|.*\.md)$
+        pass_filenames: false
+
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: "0.35.0"
+    hooks:
+      - id: check-jsonschema
+        name: "Check GitHub Workflows"
+        files: ^\.github/workflows/[^/]+$
+        types: [yaml]
+        args: ["--schemafile", "https://json.schemastore.org/github-workflow"]
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: "v2.4.1"
+    hooks:
+      - id: codespell
+        exclude: ^src/tbot_console/web/static/vendor/
+
+  - repo: local
+    hooks:
+      - id: biome-check
+        name: biome (lint + format) [web]
+        entry: biome check --error-on-warnings src/tbot_console/web/static tests/web tests/fixtures/unit_repo/js playwright.config.js
+        language: node
+        additional_dependencies: ["@biomejs/biome@2.2.0"]
+        files: ^(src/tbot_console/web/static/.*\.(js|mjs|css)|tests/web/.*\.js|tests/fixtures/unit_repo/js/.*\.(js|css)|playwright\.config\.js|biome\.json)$
+        pass_filenames: false
+      - id: tsc-checkjs
+        name: tsc --checkJs [web]
+        entry: tsc -p jsconfig.json
+        language: node
+        additional_dependencies: ["typescript@5.7.2"]
+        files: ^(src/tbot_console/web/static/js/.*\.(js|mjs|ts)|jsconfig\.json)$
+        pass_filenames: false
+      - id: web-innerhtml-baseline
+        name: innerHTML XSS tripwire [web]
+        entry: python3 scripts/check_innerhtml_baseline.py
+        language: system
+        files: ^src/tbot_console/web/static/js/.*\.js$
+        pass_filenames: false
+
+  - repo: local
+    hooks:
+      - id: pytest-check
+        name: pytest-check
+        entry: uv run pytest tests/unit --tb=short
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      - id: web-unit
+        name: node --test [web]
+        entry: npm test
+        language: system
+        files: ^src/tbot_console/web/static/js/.*\.(js|mjs)$
+        pass_filenames: false
+        stages: [pre-push]
