@@ -370,9 +370,6 @@ table.grid td {
   border-bottom: 1px solid var(--line-soft);
   vertical-align: top;
 }
-table.grid tr:hover td {
-  background: var(--panel-2);
-}
 table.grid td.num {
   text-align: right;
   white-space: nowrap;
@@ -921,6 +918,9 @@ button.btn:disabled {
 tr.proc-notes td {
   padding-top: 0;
   border-top: none;
+}
+table.grid tr:hover td {
+  background: var(--panel-2);
 }
 .proc-note {
   font-size: 12px;

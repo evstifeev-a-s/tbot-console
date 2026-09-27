@@ -48,7 +48,7 @@ repos:
     rev: "v2.4.1"
     hooks:
       - id: codespell
-        exclude: ^src/tbot_console/web/static/vendor/
+        exclude: ^(src/tbot_console/web/static/vendor/|package-lock\.json$)
 
   - repo: local
     hooks:
@@ -56,14 +56,14 @@ repos:
         name: biome (lint + format) [web]
         entry: biome check --error-on-warnings src/tbot_console/web/static tests/web tests/fixtures/unit_repo/js playwright.config.js
         language: node
-        additional_dependencies: ["@biomejs/biome@2.2.0"]
+        additional_dependencies: ["@biomejs/biome@2.5.14"]
         files: ^(src/tbot_console/web/static/.*\.(js|mjs|css)|tests/web/.*\.js|tests/fixtures/unit_repo/js/.*\.(js|css)|playwright\.config\.js|biome\.json)$
         pass_filenames: false
       - id: tsc-checkjs
         name: tsc --checkJs [web]
         entry: tsc -p jsconfig.json
         language: node
-        additional_dependencies: ["typescript@5.7.2"]
+        additional_dependencies: ["typescript@7.0.2"]
         files: ^(src/tbot_console/web/static/js/.*\.(js|mjs|ts)|jsconfig\.json)$
         pass_filenames: false
       - id: web-innerhtml-baseline
