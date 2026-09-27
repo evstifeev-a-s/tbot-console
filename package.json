@@ -14,8 +14,8 @@
     "smoke": "playwright test"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.2.0",
-    "@playwright/test": "1.62.0",
-    "typescript": "5.7.2"
+    "@biomejs/biome": "2.5.14",
+    "@playwright/test": "1.63.0",
+    "typescript": "7.0.2"
   }
 }
