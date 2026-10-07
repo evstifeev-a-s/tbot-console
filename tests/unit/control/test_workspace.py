@@ -402,7 +402,7 @@ class TestInterfaceFiles:
     def test_a_symlinked_js_folder_is_followed(self, root, tmp_path_factory):
         shared = tmp_path_factory.mktemp("shared")
         (shared / "units/demo").mkdir(parents=True)
-        (shared / "units/demo/index.js").write_text("export {};\n", encoding="utf-8")
+        (shared / "units/demo/index.js").write_bytes(b"export {};\n")
         write_manifest(root, unit("demo") | {"ui": "demo"})
         (root / "js").symlink_to(shared)
         response = loopback_client(create_app()).get("/js/units/demo/index.js")
@@ -458,7 +458,7 @@ class TestNodeGuard:
                 "--test",
                 "--test-reporter=spec",
                 "--test-reporter-destination=stdout",
-                f"--test-reporter={STATIC_DIR / 'js/require-tests.mjs'}",
+                f"--test-reporter={(STATIC_DIR / 'js/require-tests.mjs').as_uri()}",
                 "--test-reporter-destination=stderr",
                 pattern,
             ],
