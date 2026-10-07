@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime
 from types import TracebackType
 from typing import Any, Literal, TypeVar
 
-from ib_async import IB, Contract, ContractDetails, ExecutionFilter, Fill, ScanData, Ticker
+from ib_async import IB, Contract, ContractDetails, ExecutionFilter, Fill, ScanData, Ticker, Trade
 from ib_async.ib import StartupFetch
 from ib_async.objects import BarData, BarDataList, OptionComputation, ScanDataList
 from ib_async.wrapper import RequestError
@@ -28,6 +28,7 @@ from tbot_console.connectors.ibkr.instruments import (
 from tbot_console.connectors.ibkr.models import (
     ContractSpec,
     IBKRExecution,
+    IBKROrder,
     IBKRQuote,
     OptionChainSpec,
     OptionGreeks,
@@ -88,6 +89,9 @@ NO_SECURITY_DEFINITION = 200
 HISTORY_SERVICE_ERROR = 162
 NOTICE_CODES = frozenset({165, 10090, 10167})
 NO_DATA_MARKER = "no data"
+UNSET_PRICE = 1e300
+STOP_ORDER_TYPES = frozenset({"STP", "STP LMT", "STP PRT"})
+TRAIL_ORDER_TYPES = frozenset({"TRAIL", "TRAIL LIMIT", "TRAIL LIT", "TRAIL MIT"})
 
 
 def is_notice(code: int) -> bool:
@@ -282,6 +286,49 @@ def execution_from_fill(fill: Fill) -> IBKRExecution | None:
         account=execution.acctNumber,
         order_id=execution.orderId,
         perm_id=execution.permId,
+    )
+
+
+def _order_price(value: Any) -> float | None:
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(price) or price <= 0 or price >= UNSET_PRICE:
+        return None
+    return price
+
+
+def order_from_trade(trade: Trade) -> IBKROrder | None:
+    order, contract, status = trade.order, trade.contract, trade.orderStatus
+    action = order.action.upper()
+    if action not in ("BUY", "SELL"):
+        LOG.debug("IBKR order %s has no readable action %r", order.orderId, order.action)
+        return None
+    kind = order.orderType.upper()
+    if kind in STOP_ORDER_TYPES:
+        stop = _order_price(order.auxPrice)
+    elif kind in TRAIL_ORDER_TYPES:
+        stop = _order_price(order.trailStopPrice)
+    else:
+        stop = None
+    placed = trade.log[0].time if trade.log else None
+    return IBKROrder(
+        order_id=order.orderId,
+        perm_id=order.permId,
+        parent_id=order.parentId,
+        symbol=contract.symbol,
+        instrument=instrument_from_contract(contract),
+        side="buy" if action == "BUY" else "sell",
+        order_type=kind,
+        shares=_size(_order_price(order.totalQuantity)),
+        filled=_size(status.filled),
+        limit_price=_order_price(order.lmtPrice) if "LMT" in kind or "LIMIT" in kind else None,
+        stop_price=stop,
+        status=status.status,
+        account=order.account,
+        oca_group=order.ocaGroup,
+        placed_at=bar_timestamp(placed) if placed is not None else None,
     )
 
 
@@ -551,6 +598,19 @@ class IBKRClient:
             start = bar_timestamp(since)
             out = [e for e in out if e.timestamp >= start]
         return sorted(out, key=lambda e: (e.timestamp, e.exec_id))
+
+    async def fetch_open_orders(self, symbol: str = "") -> list[IBKROrder]:
+        asked = asyncio.wait_for(self._ib.reqAllOpenOrdersAsync(), self._config.timeout or None)
+        trades = await self._request(asked, "open orders")
+        wanted, account = symbol.upper(), self._config.account or ""
+        out = [
+            o
+            for o in map(order_from_trade, trades)
+            if o is not None
+            and (not wanted or o.symbol.upper() == wanted)
+            and (not account or o.account == account)
+        ]
+        return sorted(out, key=lambda o: (o.placed_at or 0.0, o.order_id))
 
     async def fetch_option_chain(self, underlying: IBKRInstrument) -> list[OptionChainSpec]:
         spec = await self.qualify(underlying)

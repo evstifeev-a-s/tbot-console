@@ -39,7 +39,13 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
   fills IB reports — the current trading day unless TWS keeps more — as `IBKRExecution`:
   `buy`/`sell`, shares, price, epoch time, order and perm ids, optionally for one `symbol` and
   from `since=`, oldest first; a read call that works on a read-only session and places
-  nothing), and the scanner:
+  nothing), `fetch_open_orders` (every working order of the session's login that IB reports —
+  placed from TWS, the mobile app or any API client, `reqAllOpenOrders` — as `IBKROrder`:
+  `buy`/`sell`, IB's order type, shares and the filled part, the limit price for a limit kind,
+  the stop trigger for a stop kind (the current trail stop for a trailing one), status, parent
+  and OCA group, and the time IB logged it; IB's unset price reads as `None`; optionally for one
+  `symbol`, only the configured `account` when one is set, in placing order; bounded by the
+  config's `timeout`; a read call that changes nothing), and the scanner:
   `scan`, `scan_vocabulary`, `watch_scan`/`stop_scan`. Contract lookups are memoized per client
   under the **whole `IBKRInstrument`** — routing and trading class included, because both change
   which contract IB resolves — and dropped on `disconnect`; the scanner vocabulary is kept across

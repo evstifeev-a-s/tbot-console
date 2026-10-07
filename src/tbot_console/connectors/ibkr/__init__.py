@@ -9,6 +9,7 @@ from tbot_console.connectors.ibkr.client import (
     execution_from_fill,
     hits_from_scan_data,
     instrument_from_contract,
+    order_from_trade,
 )
 from tbot_console.connectors.ibkr.config import (
     LIVE_TRADING_ENV,
@@ -28,6 +29,7 @@ from tbot_console.connectors.ibkr.instruments import (
 from tbot_console.connectors.ibkr.models import (
     ContractSpec,
     IBKRExecution,
+    IBKROrder,
     IBKRQuote,
     OptionChainSpec,
     OptionGreeks,
@@ -61,6 +63,7 @@ __all__ = [
     "IBKRConfig",
     "IBKRExecution",
     "IBKRInstrument",
+    "IBKROrder",
     "IBKRQuote",
     "InstrumentSyntaxError",
     "MarketDataType",
@@ -83,5 +86,6 @@ __all__ = [
     "filter_options",
     "hits_from_scan_data",
     "instrument_from_contract",
+    "order_from_trade",
     "parse_scanner_parameters",
 ]
