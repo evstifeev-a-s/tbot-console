@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -50,6 +51,8 @@ class BusyError(RuntimeError):
 @contextlib.contextmanager
 def transition_lock(path: Path) -> Iterator[None]:
     procs.require_posix()
+    if sys.platform == "win32":
+        return
     import fcntl
 
     path.parent.mkdir(parents=True, exist_ok=True)

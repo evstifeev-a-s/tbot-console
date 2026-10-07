@@ -9,9 +9,9 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
-from ib_async import IB, Contract, ContractDetails, ScanData, Ticker
+from ib_async import IB, Contract, ContractDetails, ExecutionFilter, Fill, ScanData, Ticker
 from ib_async.ib import StartupFetch
 from ib_async.objects import BarData, BarDataList, OptionComputation, ScanDataList
 from ib_async.wrapper import RequestError
@@ -27,6 +27,7 @@ from tbot_console.connectors.ibkr.instruments import (
 )
 from tbot_console.connectors.ibkr.models import (
     ContractSpec,
+    IBKRExecution,
     IBKRQuote,
     OptionChainSpec,
     OptionGreeks,
@@ -261,6 +262,27 @@ def instrument_from_contract(contract: Contract) -> IBKRInstrument | None:
     except InstrumentSyntaxError as exc:
         LOG.debug("IBKR contract %s is not expressible as an instrument: %s", contract, exc)
         return None
+
+
+def execution_from_fill(fill: Fill) -> IBKRExecution | None:
+    execution, contract = fill.execution, fill.contract
+    side = execution.side.upper()
+    if side not in ("BOT", "SLD"):
+        LOG.debug("IBKR execution %s has no readable side %r", execution.execId, execution.side)
+        return None
+    direction: Literal["buy", "sell"] = "buy" if side == "BOT" else "sell"
+    return IBKRExecution(
+        exec_id=execution.execId,
+        timestamp=bar_timestamp(execution.time),
+        symbol=contract.symbol,
+        instrument=instrument_from_contract(contract),
+        side=direction,
+        shares=_size(execution.shares),
+        price=_to_float(execution.price),
+        account=execution.acctNumber,
+        order_id=execution.orderId,
+        perm_id=execution.permId,
+    )
 
 
 def hits_from_scan_data(rows: Iterable[ScanData]) -> list[ScanHit]:
@@ -518,6 +540,17 @@ class IBKRClient:
                 f"IBKR sent no history of {key} within {timeout:g} s; the gateway may be "
                 "overloaded or pacing the requests"
             )
+
+    async def fetch_executions(
+        self, symbol: str = "", since: datetime | None = None
+    ) -> list[IBKRExecution]:
+        flt = ExecutionFilter(acctCode=self._config.account or "", symbol=symbol.upper())
+        fills = await self._request(self._ib.reqExecutionsAsync(flt), "executions")
+        out = [e for e in map(execution_from_fill, fills) if e is not None]
+        if since is not None:
+            start = bar_timestamp(since)
+            out = [e for e in out if e.timestamp >= start]
+        return sorted(out, key=lambda e: (e.timestamp, e.exec_id))
 
     async def fetch_option_chain(self, underlying: IBKRInstrument) -> list[OptionChainSpec]:
         spec = await self.qualify(underlying)

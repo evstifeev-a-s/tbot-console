@@ -74,6 +74,6 @@ def resolve(base: Path, raw: str) -> Path:
 
 def relative(base: Path, path: Path) -> str:
     try:
-        return str(path.resolve().relative_to(base))
+        return path.resolve().relative_to(base).as_posix()
     except ValueError:
         return str(path)

@@ -6,6 +6,7 @@ from tbot_console.connectors.ibkr.client import (
     build_contract,
     duration_for,
     duration_since,
+    execution_from_fill,
     hits_from_scan_data,
     instrument_from_contract,
 )
@@ -26,6 +27,7 @@ from tbot_console.connectors.ibkr.instruments import (
 )
 from tbot_console.connectors.ibkr.models import (
     ContractSpec,
+    IBKRExecution,
     IBKRQuote,
     OptionChainSpec,
     OptionGreeks,
@@ -57,6 +59,7 @@ __all__ = [
     "Gateway",
     "IBKRClient",
     "IBKRConfig",
+    "IBKRExecution",
     "IBKRInstrument",
     "IBKRQuote",
     "InstrumentSyntaxError",
@@ -76,6 +79,7 @@ __all__ = [
     "default_port",
     "duration_for",
     "duration_since",
+    "execution_from_fill",
     "filter_options",
     "hits_from_scan_data",
     "instrument_from_contract",

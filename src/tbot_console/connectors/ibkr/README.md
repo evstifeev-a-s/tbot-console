@@ -35,7 +35,11 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
 - `IBKRClient` — `connect`/`disconnect` (also an async context manager), `qualify`,
   `fetch_quote`/`fetch_quotes`, `fetch_bars` (the last `count` bars, or with `since=` only the
   bars from that moment on, asked in seconds while the span is under a day — the cheap way to
-  refresh a series you already hold), `fetch_option_chain`, and the scanner:
+  refresh a series you already hold), `fetch_option_chain`, `fetch_executions` (the account's
+  fills IB reports — the current trading day unless TWS keeps more — as `IBKRExecution`:
+  `buy`/`sell`, shares, price, epoch time, order and perm ids, optionally for one `symbol` and
+  from `since=`, oldest first; a read call that works on a read-only session and places
+  nothing), and the scanner:
   `scan`, `scan_vocabulary`, `watch_scan`/`stop_scan`. Contract lookups are memoized per client
   under the **whole `IBKRInstrument`** — routing and trading class included, because both change
   which contract IB resolves — and dropped on `disconnect`; the scanner vocabulary is kept across

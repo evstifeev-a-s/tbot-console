@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 import os
 import secrets
 from collections.abc import Awaitable, Callable
@@ -16,6 +17,9 @@ from tbot_console.control.service import host_name, is_loopback_host
 from tbot_console.web import control_api, proxy
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
 
 SECURITY_HEADERS = {
     "Content-Security-Policy": (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from tbot_console.connectors.ibkr.instruments import IBKRInstrument
 
@@ -40,6 +41,20 @@ class IBKRQuote:
         if self.bid is None or self.ask is None:
             return None
         return self.ask - self.bid
+
+
+@dataclass(frozen=True, slots=True)
+class IBKRExecution:
+    exec_id: str
+    timestamp: float
+    symbol: str
+    instrument: IBKRInstrument | None
+    side: Literal["buy", "sell"]
+    shares: float
+    price: float
+    account: str
+    order_id: int
+    perm_id: int
 
 
 @dataclass(frozen=True, slots=True)

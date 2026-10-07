@@ -5,14 +5,22 @@ from typing import Any
 
 from eventkit import Event
 from ib_async import Contract, ContractDetails, ScanData, ScannerSubscription, Ticker
-from ib_async.objects import BarData, BarDataList, OptionChain, ScanDataList, TagValue
+from ib_async.objects import (
+    BarData,
+    BarDataList,
+    ExecutionFilter,
+    Fill,
+    OptionChain,
+    ScanDataList,
+    TagValue,
+)
 
 
 class FakeIB:
     """Stand-in for ``ib_async.IB`` — records calls, replays canned responses.
 
     ``raise_on`` maps a stage name ("connect", "details", "tickers", "history",
-    "chain", "scan", "scanner_parameters") to the exception that stage should
+    "chain", "scan", "scanner_parameters", "executions") to the exception that stage should
     raise, which is how the error mapping in ``IBKRClient`` gets exercised
     without a gateway. ``history_errors``, ``ticker_errors`` (by conId) and
     ``scan_errors`` are emitted on ``errorEvent`` the way ib_async reports a
@@ -45,6 +53,8 @@ class FakeIB:
         self.ticker_errors: dict[int, tuple[int, str]] = {}
         self.scan_errors: list[tuple[int, str]] = []
         self.last_req_id = 0
+        self.fills: list[Fill] = []
+        self.execution_calls: list[ExecutionFilter] = []
 
     def _req_id(self) -> int:
         self.last_req_id += 1
@@ -101,6 +111,11 @@ class FakeIB:
         if self.history_delay:
             await asyncio.sleep(self.history_delay)
         return bars
+
+    async def reqExecutionsAsync(self, execFilter: ExecutionFilter | None = None) -> list[Fill]:
+        self.execution_calls.append(execFilter or ExecutionFilter())
+        self._maybe_raise("executions")
+        return list(self.fills)
 
     async def reqSecDefOptParamsAsync(
         self,
