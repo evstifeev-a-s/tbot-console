@@ -10,7 +10,7 @@ requires-python = ">=3.14"
 dependencies = ["tbot-console", "fastapi>=0.115.0"]
 
 [tool.uv.sources]
-tbot-console = { git = "https://github.com/evstifeev-a-s/tbot-console.git", tag = "v1.1.0" }
+tbot-console = { git = "https://github.com/evstifeev-a-s/tbot-console.git", tag = "v1.2.0" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/demo_unit"]
