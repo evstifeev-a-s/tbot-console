@@ -14,13 +14,14 @@ from ib_async.objects import (
     ScanDataList,
     TagValue,
 )
+from ib_async.order import Trade
 
 
 class FakeIB:
     """Stand-in for ``ib_async.IB`` — records calls, replays canned responses.
 
     ``raise_on`` maps a stage name ("connect", "details", "tickers", "history",
-    "chain", "scan", "scanner_parameters", "executions") to the exception that stage should
+    "chain", "scan", "scanner_parameters", "executions", "orders") to the exception that stage should
     raise, which is how the error mapping in ``IBKRClient`` gets exercised
     without a gateway. ``history_errors``, ``ticker_errors`` (by conId) and
     ``scan_errors`` are emitted on ``errorEvent`` the way ib_async reports a
@@ -55,6 +56,8 @@ class FakeIB:
         self.last_req_id = 0
         self.fills: list[Fill] = []
         self.execution_calls: list[ExecutionFilter] = []
+        self.open_trades: list[Trade] = []
+        self.open_order_calls = 0
 
     def _req_id(self) -> int:
         self.last_req_id += 1
@@ -116,6 +119,11 @@ class FakeIB:
         self.execution_calls.append(execFilter or ExecutionFilter())
         self._maybe_raise("executions")
         return list(self.fills)
+
+    async def reqAllOpenOrdersAsync(self) -> list[Trade]:
+        self.open_order_calls += 1
+        self._maybe_raise("orders")
+        return list(self.open_trades)
 
     async def reqSecDefOptParamsAsync(
         self,

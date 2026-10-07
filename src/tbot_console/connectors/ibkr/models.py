@@ -58,6 +58,25 @@ class IBKRExecution:
 
 
 @dataclass(frozen=True, slots=True)
+class IBKROrder:
+    order_id: int
+    perm_id: int
+    parent_id: int
+    symbol: str
+    instrument: IBKRInstrument | None
+    side: Literal["buy", "sell"]
+    order_type: str
+    shares: float
+    filled: float
+    limit_price: float | None
+    stop_price: float | None
+    status: str
+    account: str
+    oca_group: str
+    placed_at: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class ContractSpec:
     instrument: IBKRInstrument
     con_id: int
