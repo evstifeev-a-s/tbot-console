@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
+from eventkit import Event
 from ib_async import Contract, ContractDetails, ScanData, ScannerSubscription, Ticker
-from ib_async.objects import BarData, OptionChain, ScanDataList, TagValue
+from ib_async.objects import BarData, BarDataList, OptionChain, ScanDataList, TagValue
 
 
 class FakeIB:
@@ -12,7 +14,9 @@ class FakeIB:
     ``raise_on`` maps a stage name ("connect", "details", "tickers", "history",
     "chain", "scan", "scanner_parameters") to the exception that stage should
     raise, which is how the error mapping in ``IBKRClient`` gets exercised
-    without a gateway.
+    without a gateway. ``history_errors``, ``ticker_errors`` (by conId) and
+    ``scan_errors`` are emitted on ``errorEvent`` the way ib_async reports a
+    failed request while still returning an empty result.
     """
 
     def __init__(self) -> None:
@@ -35,6 +39,16 @@ class FakeIB:
         self.live_scans: list[ScanDataList] = []
         self.cancelled_scans: list[ScanDataList] = []
         self.raise_on: dict[str, BaseException] = {}
+        self.errorEvent = Event("errorEvent")
+        self.history_errors: list[tuple[int, str]] = []
+        self.history_delay = 0.0
+        self.ticker_errors: dict[int, tuple[int, str]] = {}
+        self.scan_errors: list[tuple[int, str]] = []
+        self.last_req_id = 0
+
+    def _req_id(self) -> int:
+        self.last_req_id += 1
+        return self.last_req_id
 
     def _maybe_raise(self, stage: str) -> None:
         error = self.raise_on.get(stage)
@@ -67,12 +81,26 @@ class FakeIB:
     ) -> list[Ticker]:
         self.ticker_calls.append(contracts)
         self._maybe_raise("tickers")
+        for contract in contracts:
+            req_id = self._req_id()
+            failure = self.ticker_errors.get(contract.conId)
+            if failure is not None:
+                self.errorEvent.emit(req_id, *failure, contract)
         return list(self.tickers)
 
-    async def reqHistoricalDataAsync(self, contract: Contract, **kwargs: Any) -> list[BarData]:
+    async def reqHistoricalDataAsync(self, contract: Contract, **kwargs: Any) -> BarDataList:
         self.history_calls.append({"contract": contract, **kwargs})
         self._maybe_raise("history")
-        return list(self.bars)
+        bars = BarDataList(self.bars)
+        bars.reqId = self._req_id()
+        self.errorEvent.emit(-1, 2104, "Market data farm connection is OK:usfarm", None)
+        for code, message in self.history_errors:
+            self.errorEvent.emit(bars.reqId, code, message, contract)
+        if self.history_errors:
+            bars.clear()
+        if self.history_delay:
+            await asyncio.sleep(self.history_delay)
+        return bars
 
     async def reqSecDefOptParamsAsync(
         self,
@@ -100,7 +128,13 @@ class FakeIB:
     ) -> ScanDataList:
         self.scan_calls.append((subscription, list(scannerSubscriptionFilterOptions or [])))
         self._maybe_raise("scan")
-        return ScanDataList(self.scan_rows)
+        rows = ScanDataList(self.scan_rows)
+        rows.reqId = self._req_id()
+        for code, message in self.scan_errors:
+            self.errorEvent.emit(rows.reqId, code, message, None)
+        if self.scan_errors:
+            rows.clear()
+        return rows
 
     def reqScannerSubscription(
         self,

@@ -5,6 +5,7 @@ from tbot_console.connectors.ibkr.client import (
     ScanWatch,
     build_contract,
     duration_for,
+    duration_since,
     hits_from_scan_data,
     instrument_from_contract,
 )
@@ -74,6 +75,7 @@ __all__ = [
     "build_subscription",
     "default_port",
     "duration_for",
+    "duration_since",
     "filter_options",
     "hits_from_scan_data",
     "instrument_from_contract",

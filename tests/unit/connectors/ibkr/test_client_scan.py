@@ -47,6 +47,14 @@ def client(ib: FakeIB) -> IBKRClient:
 
 
 class TestScanSnapshot:
+    async def test_a_scan_ib_refused_is_an_error_with_its_code(
+        self, client: IBKRClient, ib: FakeIB
+    ):
+        ib.scan_errors = [(162, "Scanner subscription limit reached")]
+        with pytest.raises(ExchangeRequestError, match="subscription limit") as caught:
+            await client.scan(GAINERS)
+        assert caught.value.code == 162
+
     async def test_sends_the_built_subscription(self, client: IBKRClient, ib: FakeIB):
         await client.scan(GAINERS)
 

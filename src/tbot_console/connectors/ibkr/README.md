@@ -33,7 +33,9 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
 ```
 
 - `IBKRClient` — `connect`/`disconnect` (also an async context manager), `qualify`,
-  `fetch_quote`/`fetch_quotes`, `fetch_bars`, `fetch_option_chain`, and the scanner:
+  `fetch_quote`/`fetch_quotes`, `fetch_bars` (the last `count` bars, or with `since=` only the
+  bars from that moment on, asked in seconds while the span is under a day — the cheap way to
+  refresh a series you already hold), `fetch_option_chain`, and the scanner:
   `scan`, `scan_vocabulary`, `watch_scan`/`stop_scan`. Contract lookups are memoized per client
   under the **whole `IBKRInstrument`** — routing and trading class included, because both change
   which contract IB resolves — and dropped on `disconnect`; the scanner vocabulary is kept across
@@ -45,7 +47,13 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
   `from_env(force_readonly=True)` ignores `IBKR_WRITABLE`, so a read-only caller never trips the
   live-trading guard.
 - Every venue failure surfaces as `tbot_console.core.exceptions.ExchangeRequestError` (carrying
-  IB's numeric error code) or `ExchangeConnectionError` — never a raw `ib_async` exception.
+  IB's numeric error code) or `ExchangeConnectionError` — never a raw `ib_async` exception and
+  never a silent empty answer. `fetch_bars` and `scan` raise for an error IB reports on their own
+  request; `fetch_bars` returns `[]` only for IB's "HMDS query returned no data" (code 162) and
+  raises `ExchangeConnectionError` for a history IB never answered within the timeout;
+  `fetch_quotes` leaves out (and logs with its code) an instrument whose snapshot IB refused, so
+  a refused quote is never read as a live one. Notices are not failures: 165, 10090 (partly
+  subscribed), 10167 (delayed data shown) and the 2100–2199 farm-status messages.
 
 ## Scanners
 
@@ -127,7 +135,7 @@ IB error 200.
 | `config.py` | `IBKRConfig` (+`from_env`), `Gateway`, `MarketDataType`, the `PORTS` table, the live-trading guard. No `ib_async` import |
 | `models.py` | Cold-path results: `IBKRQuote` (+`mid`/`spread`), `OptionGreeks`, `ContractSpec`, `OptionChainSpec` (+`nearest_strikes`) |
 | `scanner.py` | The scanner as pure logic: `ScanRequest`, `ScanHit`, `ScanType`/`ScanLocation`/`ScannerVocabulary`, `build_subscription` (the sentinel handling), `filter_options`, `parse_scanner_parameters` (the XML catalogue), `MAX_ROWS`/`MAX_ACTIVE_SCANS` |
-| `client.py` | `IBKRClient`; the ib_async↔ours row translation — `build_contract`, `instrument_from_contract`, `spec_from_details`, `candle_from_bar` (→ `analysis.models.Candle`), `quote_from_ticker`, `hits_from_scan_data`; `duration_for`, `bar_timestamp`; `BAR_SIZE`, `WHAT_TO_SHOW`, `MAX_DURATION_DAYS`; `ScanWatch` |
+| `client.py` | `IBKRClient`; the ib_async↔ours row translation — `build_contract`, `instrument_from_contract`, `spec_from_details`, `candle_from_bar` (→ `analysis.models.Candle`), `quote_from_ticker`, `hits_from_scan_data`; `duration_for`, `duration_since`, `bar_timestamp`; `RequestErrors` (the per-call `errorEvent` listener), `is_notice`, `is_no_data`; `BAR_SIZE`, `WHAT_TO_SHOW`, `MAX_DURATION_DAYS`; `ScanWatch` |
 
 Unit tests: `tests/unit/connectors/ibkr/` (a `FakeIB` stands in for the gateway; scanner streaming
 is driven through `ScanDataList.updateEvent.emit`).
@@ -169,7 +177,17 @@ opens a writable session and never places orders ([AGENTS.md](../../../../AGENTS
 - **History is capped by bar size.** `duration_for` converts a bar count into an IB duration
   string, stretching for nights and weekends (a 6.5 h session, ×1.45 for calendar days), then
   clamps to `MAX_DURATION_DAYS`. A request for more 1-minute bars than IB will serve in one call
-  returns what fits rather than failing — check `len()` before assuming depth.
+  returns what fits rather than failing — check `len()` before assuming depth. The smallest day
+  unit is a whole day: asking for the last 120 one-minute bars still downloads the full day, so a
+  refresh should pass `since=` instead (`duration_since`: calendar seconds back from now plus one
+  bar, up to 86 400 s; beyond that whole days within the same cap).
+- **ib_async swallows request errors.** With its default `RaiseRequestErrors = False` a failed
+  request ends with an empty result and the error goes only to the log and `IB.errorEvent`. The
+  client listens to `errorEvent` for the duration of each call (`RequestErrors`, keyed by request
+  id and by contract) instead of flipping that switch, because the switch is global to the `IB`
+  object and would make one refused contract fail a whole multi-contract snapshot. ib_async also
+  counts 321 (request validation) as a warning and keeps waiting for the answer; the client
+  still reports it once the request ends.
 - **One client id per connection.** A second client reusing `IBKR_CLIENT_ID` is refused by the
   gateway; give parallel processes distinct ids.
 - **Ambiguous contracts.** `reqContractDetails` can return several matches (same ticker on
@@ -208,8 +226,8 @@ opens a writable session and never places orders ([AGENTS.md](../../../../AGENTS
 
 - `IBKRInstrument.parse` is the only place that turns a string into an IB contract — unit code
   and tests go through it; never hand-build a `Contract`.
-- `duration_for` / `BAR_SIZE` encode IB's historical-data limits; reuse them instead of
-  re-deriving durations.
+- `duration_for` / `duration_since` / `BAR_SIZE` encode IB's historical-data limits; reuse them
+  instead of re-deriving durations.
 - `build_subscription` is the only correct way to fill a `ScannerSubscription` — it is where the
   unset-sentinel rule lives.
 - `instrument_from_contract` is the exact inverse of `build_contract` — trading class and

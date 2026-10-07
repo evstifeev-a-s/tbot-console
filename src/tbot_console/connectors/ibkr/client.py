@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import math
-from collections.abc import Awaitable, Callable, Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from types import TracebackType
 from typing import Any, TypeVar
 
 from ib_async import IB, Contract, ContractDetails, ScanData, Ticker
 from ib_async.ib import StartupFetch
-from ib_async.objects import BarData, OptionComputation, ScanDataList
+from ib_async.objects import BarData, BarDataList, OptionComputation, ScanDataList
 from ib_async.wrapper import RequestError
 
 from tbot_console.analysis.models import TIMEFRAME_SECONDS, Candle, Timeframe
@@ -83,6 +84,46 @@ DELAYED_FEEDS = frozenset({MarketDataType.DELAYED, MarketDataType.DELAYED_FROZEN
 HISTORY_TIMEOUT_FACTOR = 8.0
 
 NO_SECURITY_DEFINITION = 200
+HISTORY_SERVICE_ERROR = 162
+NOTICE_CODES = frozenset({165, 10090, 10167})
+NO_DATA_MARKER = "no data"
+
+
+def is_notice(code: int) -> bool:
+    return code in NOTICE_CODES or 2100 <= code < 2200
+
+
+def is_no_data(code: int, message: str) -> bool:
+    return code == HISTORY_SERVICE_ERROR and NO_DATA_MARKER in message.lower()
+
+
+@dataclass(slots=True)
+class RequestErrors:
+    by_request: dict[int, tuple[int, str]] = field(default_factory=dict)
+    by_contract: dict[int, tuple[int, str]] = field(default_factory=dict)
+
+    def __call__(self, req_id: int, code: int, message: str, contract: Contract | None) -> None:
+        if is_notice(code):
+            return
+        self.by_request.setdefault(req_id, (code, message))
+        if contract is not None and contract.conId:
+            self.by_contract.setdefault(contract.conId, (code, message))
+
+
+def _days_duration(days: int) -> str:
+    if days >= 365:
+        return f"{math.ceil(days / 365)} Y"
+    return f"{days} D"
+
+
+def duration_since(timeframe: Timeframe, since: datetime, now: datetime | None = None) -> str:
+    moment = bar_timestamp(now if now is not None else datetime.now(UTC))
+    bar_seconds = TIMEFRAME_SECONDS[timeframe]
+    span = max(0.0, moment - bar_timestamp(since)) + bar_seconds
+    if bar_seconds < SECONDS_PER_DAY and span <= SECONDS_PER_DAY:
+        return f"{math.ceil(span)} S"
+    days = min(max(math.ceil(span / SECONDS_PER_DAY), 1), MAX_DURATION_DAYS[timeframe])
+    return _days_duration(days)
 
 
 def duration_for(timeframe: Timeframe, count: int) -> str:
@@ -92,10 +133,7 @@ def duration_for(timeframe: Timeframe, count: int) -> str:
     else:
         bars_per_day = max(1.0, TRADING_SECONDS_PER_DAY / bar_seconds)
     days = math.ceil(max(count, 1) / bars_per_day * CALENDAR_STRETCH)
-    days = min(max(days, 1), MAX_DURATION_DAYS[timeframe])
-    if days >= 365:
-        return f"{math.ceil(days / 365)} Y"
-    return f"{days} D"
+    return _days_duration(min(max(days, 1), MAX_DURATION_DAYS[timeframe]))
 
 
 def build_contract(instrument: IBKRInstrument) -> Contract:
@@ -322,6 +360,15 @@ class IBKRClient:
     ) -> None:
         await self.disconnect()
 
+    @contextlib.contextmanager
+    def _errors(self) -> Iterator[RequestErrors]:
+        errors = RequestErrors()
+        self._ib.errorEvent += errors
+        try:
+            yield errors
+        finally:
+            self._ib.errorEvent -= errors
+
     async def _request(self, awaitable: Awaitable[T], what: str) -> T:
         try:
             return await awaitable
@@ -395,13 +442,18 @@ class IBKRClient:
         if not pairs:
             return {}
 
-        tickers = await self._request(
-            self._ib.reqTickersAsync(*[contract for _, contract in pairs]), "tickers"
-        )
+        with self._errors() as errors:
+            tickers = await self._request(
+                self._ib.reqTickersAsync(*[contract for _, contract in pairs]), "tickers"
+            )
         by_con_id = {t.contract.conId: t for t in tickers if t.contract is not None}
 
         quotes: dict[str, IBKRQuote] = {}
         for key, contract in pairs:
+            failure = errors.by_contract.get(contract.conId)
+            if failure is not None:
+                LOG.warning("IBKR quote skipped for %s: error %d: %s", key, *failure)
+                continue
             ticker = by_con_id.get(contract.conId)
             if ticker is not None:
                 quotes[key] = quote_from_ticker(key, ticker)
@@ -413,6 +465,7 @@ class IBKRClient:
         timeframe: Timeframe,
         count: int = 100,
         use_rth: bool = False,
+        since: datetime | None = None,
     ) -> list[Candle]:
         bar_size = BAR_SIZE.get(timeframe)
         if bar_size is None:
@@ -420,22 +473,51 @@ class IBKRClient:
 
         key = instrument.to_normalized()
         contract = await self._qualified_contract(instrument)
-        bars = await self._request(
-            self._ib.reqHistoricalDataAsync(
-                contract,
-                endDateTime="",
-                durationStr=duration_for(timeframe, count),
-                barSizeSetting=bar_size,
-                whatToShow=WHAT_TO_SHOW[instrument.sec_type],
-                useRTH=use_rth,
-                formatDate=2,
-                timeout=self._config.timeout * HISTORY_TIMEOUT_FACTOR,
-            ),
-            f"history of {key}",
+        duration = (
+            duration_for(timeframe, count) if since is None else duration_since(timeframe, since)
         )
+        timeout = self._config.timeout * HISTORY_TIMEOUT_FACTOR
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with self._errors() as errors:
+            bars = await self._request(
+                self._ib.reqHistoricalDataAsync(
+                    contract,
+                    endDateTime="",
+                    durationStr=duration,
+                    barSizeSetting=bar_size,
+                    whatToShow=WHAT_TO_SHOW[instrument.sec_type],
+                    useRTH=use_rth,
+                    formatDate=2,
+                    timeout=timeout,
+                ),
+                f"history of {key}",
+            )
+        if not bars:
+            self._raise_for_empty_history(key, errors, bars, timeout, loop.time() - started)
 
         candles = [candle_from_bar(bar) for bar in bars]
+        if since is not None:
+            start = bar_timestamp(since)
+            candles = [candle for candle in candles if candle.timestamp >= start]
         return candles[-count:] if count > 0 else candles
+
+    def _raise_for_empty_history(
+        self, key: str, errors: RequestErrors, bars: BarDataList, timeout: float, waited: float
+    ) -> None:
+        failure = errors.by_request.get(bars.reqId)
+        if failure is not None:
+            code, message = failure
+            if is_no_data(code, message):
+                return
+            raise ExchangeRequestError(
+                f"IBKR rejected history of {key}: {message}", code=code, reason=message
+            )
+        if timeout and waited >= timeout:
+            raise ExchangeConnectionError(
+                f"IBKR sent no history of {key} within {timeout:g} s; the gateway may be "
+                "overloaded or pacing the requests"
+            )
 
     async def fetch_option_chain(self, underlying: IBKRInstrument) -> list[OptionChainSpec]:
         spec = await self.qualify(underlying)
@@ -481,10 +563,19 @@ class IBKRClient:
                     + "; ".join(complaints)
                 )
 
-        rows = await self._request(
-            self._ib.reqScannerDataAsync(build_subscription(request), [], filter_options(request)),
-            f"scan {request.scan_code}",
-        )
+        with self._errors() as errors:
+            rows = await self._request(
+                self._ib.reqScannerDataAsync(
+                    build_subscription(request), [], filter_options(request)
+                ),
+                f"scan {request.scan_code}",
+            )
+        failure = errors.by_request.get(rows.reqId)
+        if not rows and failure is not None:
+            code, message = failure
+            raise ExchangeRequestError(
+                f"IBKR rejected scan {request.scan_code}: {message}", code=code, reason=message
+            )
         return hits_from_scan_data(rows)
 
     async def watch_scan(self, request: ScanRequest, callback: ScanCallback) -> ScanWatch:

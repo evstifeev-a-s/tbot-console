@@ -9,6 +9,7 @@ from ib_async.objects import OptionChain, OptionComputation
 from ib_async.wrapper import RequestError
 
 from tbot_console.analysis.models import Timeframe
+from tbot_console.connectors.ibkr import client as client_module
 from tbot_console.connectors.ibkr.client import (
     BAR_SIZE,
     WHAT_TO_SHOW,
@@ -16,6 +17,7 @@ from tbot_console.connectors.ibkr.client import (
     bar_timestamp,
     build_contract,
     duration_for,
+    duration_since,
 )
 from tbot_console.connectors.ibkr.config import IBKRConfig, MarketDataType
 from tbot_console.connectors.ibkr.instruments import IBKRInstrument, SecType
@@ -235,6 +237,31 @@ class TestQuotes:
         assert await client.fetch_quotes([]) == {}
         assert not ib.ticker_calls
 
+    async def test_a_snapshot_ib_refused_is_skipped_not_reported_live(
+        self, client: IBKRClient, ib: FakeIB, caplog: pytest.LogCaptureFixture
+    ):
+        apple = make_contract("AAPL", 265598)
+        index = make_contract("SPX", 416904, sec_type="OPT", multiplier="100")
+        ib.details_by_symbol = {"AAPL": [make_details(apple)], "SPX": [make_details(index)]}
+        ib.tickers = [make_ticker(apple, bid=190.0), make_ticker(index, bid=NAN)]
+        ib.ticker_errors = {416904: (10197, "No market data during competing live session")}
+
+        with caplog.at_level(logging.WARNING):
+            quotes = await client.fetch_quotes([SPX_CALL, AAPL])
+
+        assert set(quotes) == {"AAPL-USD-STK"}
+        assert "error 10197" in caplog.text
+
+    async def test_a_delayed_data_notice_keeps_the_quote(self, client: IBKRClient, ib: FakeIB):
+        apple = make_contract("AAPL", 265598)
+        ib.details = [make_details(apple)]
+        ib.tickers = [make_ticker(apple, bid=190.0, marketDataType=3)]
+        ib.ticker_errors = {265598: (10167, "Displaying delayed market data")}
+
+        quote = await client.fetch_quote(AAPL)
+
+        assert quote is not None and quote.delayed and quote.bid == 190.0
+
 
 class TestPriceSentinels:
     async def test_worthless_option_reports_zero_not_missing(self, client: IBKRClient, ib: FakeIB):
@@ -394,6 +421,72 @@ class TestBars:
         candles = await client.fetch_bars(AAPL, Timeframe.D1)
         assert candles[0].volume == 0.0
 
+    async def test_an_error_ib_reports_on_the_request_carries_its_code(
+        self, client: IBKRClient, ib: FakeIB
+    ):
+        ib.history_errors = [(162, "Historical Market Data Service error message:Pacing violation")]
+
+        with pytest.raises(ExchangeRequestError, match="Pacing violation") as caught:
+            await client.fetch_bars(AAPL, Timeframe.M1, count=120)
+
+        assert caught.value.code == 162
+        assert "history of AAPL-USD-STK" in str(caught.value)
+
+    @pytest.mark.parametrize(
+        ("code", "message"),
+        [
+            (10197, "No market data during competing live session"),
+            (354, "Requested market data is not subscribed."),
+            (321, "Error validating request.-'bP' : cause - Historical data request duration"),
+        ],
+    )
+    async def test_a_refused_history_is_an_error_not_an_empty_list(
+        self, client: IBKRClient, ib: FakeIB, code: int, message: str
+    ):
+        ib.history_errors = [(code, message)]
+        with pytest.raises(ExchangeRequestError) as caught:
+            await client.fetch_bars(AAPL, Timeframe.M1)
+        assert (caught.value.code, caught.value.reason) == (code, message)
+
+    async def test_no_data_for_the_period_is_an_empty_list(self, client: IBKRClient, ib: FakeIB):
+        ib.history_errors = [(162, "HMDS query returned no data: AAPL@SMART Trades")]
+        assert await client.fetch_bars(AAPL, Timeframe.M1) == []
+
+    async def test_an_error_of_another_request_is_not_this_ones(
+        self, client: IBKRClient, ib: FakeIB
+    ):
+        ib.bars = [make_bar(datetime(2026, 9, 19, 14, 30, tzinfo=UTC))]
+        await client.fetch_bars(AAPL, Timeframe.M1)
+        ib.errorEvent.emit(ib.last_req_id, 162, "Pacing violation", None)
+        ib.bars = []
+
+        assert await client.fetch_bars(AAPL, Timeframe.M1) == []
+
+    async def test_a_history_ib_never_answered_is_a_connection_error(
+        self, client: IBKRClient, ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(client_module, "HISTORY_TIMEOUT_FACTOR", 0.001)
+        ib.history_delay = 0.02
+
+        with pytest.raises(ExchangeConnectionError, match="no history of AAPL-USD-STK"):
+            await client.fetch_bars(AAPL, Timeframe.M1)
+
+    async def test_bars_since_a_moment_ask_ib_for_seconds_and_drop_older_bars(
+        self, client: IBKRClient, ib: FakeIB
+    ):
+        since = datetime.now(UTC).replace(second=0, microsecond=0)
+        earlier = since.timestamp() - 60
+        ib.bars = [
+            make_bar(datetime.fromtimestamp(earlier, UTC)),
+            make_bar(since),
+        ]
+
+        candles = await client.fetch_bars(AAPL, Timeframe.M1, count=120, since=since)
+
+        duration = ib.history_calls[0]["durationStr"]
+        assert duration.endswith(" S") and int(duration.split()[0]) <= 180
+        assert [candle.timestamp for candle in candles] == [since.timestamp()]
+
     async def test_rejection_carries_the_code(self, client: IBKRClient, ib: FakeIB):
         ib.raise_on["history"] = RequestError(3, 162, "Historical Market Data Service error")
         with pytest.raises(ExchangeRequestError) as caught:
@@ -498,6 +591,23 @@ class TestDuration:
             duration_for(tf, count).split()[1] for tf in Timeframe for count in (1, 100, 10**6)
         }
         assert units == {"D", "Y"}
+
+    def test_a_short_span_is_asked_in_seconds_with_one_bar_to_spare(self):
+        now = datetime(2026, 9, 24, 14, 30, tzinfo=UTC)
+        since = datetime(2026, 9, 24, 14, 28, tzinfo=UTC)
+        assert duration_since(Timeframe.M1, since, now) == "180 S"
+        assert duration_since(Timeframe.M5, now, now) == "300 S"
+
+    def test_a_span_beyond_a_day_falls_back_to_days_within_the_cap(self):
+        now = datetime(2026, 9, 24, 14, 30, tzinfo=UTC)
+        assert duration_since(Timeframe.M1, datetime(2026, 9, 22, 20, 0, tzinfo=UTC), now) == "2 D"
+        assert duration_since(Timeframe.M1, datetime(2026, 8, 1, tzinfo=UTC), now) == "7 D"
+        assert duration_since(Timeframe.D1, datetime(2026, 9, 1, tzinfo=UTC), now) == "25 D"
+
+    def test_a_naive_moment_is_read_as_utc_and_a_future_one_as_now(self):
+        now = datetime(2026, 9, 24, 14, 30, tzinfo=UTC)
+        assert duration_since(Timeframe.M1, datetime(2026, 9, 24, 14, 29), now) == "120 S"
+        assert duration_since(Timeframe.M1, datetime(2026, 9, 25, tzinfo=UTC), now) == "60 S"
 
     def test_zero_count_is_still_a_valid_request(self):
         assert duration_for(Timeframe.H1, 0) == "1 D"
