@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from tbot_console.control import paths, procs
+from tbot_console.control import live, paths, procs
 from tbot_console.control.files import flock_held, read_object
 from tbot_console.control.manifest import UnitManifest
 
@@ -114,6 +114,17 @@ def output_file(
     return paths.resolve(base, str((record or {}).get("output") or unit.output_path(proc)))
 
 
+def live_trading_view(
+    unit: UnitManifest, proc: str, record: dict[str, Any] | None, alive: bool
+) -> dict[str, Any] | None:
+    if not unit.trades(proc):
+        return None
+    started = (record or {}).get("live_trading") if alive else None
+    known = started if isinstance(started, bool) else None
+    enabled = live.enabled(paths.root(), unit.id)
+    return {"started": known, "restart": known is not None and known != enabled}
+
+
 def _op_summary(op: dict[str, Any] | None) -> dict[str, Any] | None:
     if not op:
         return None
@@ -150,6 +161,7 @@ def process_view(base: Path, unit: UnitManifest, proc: str) -> dict[str, Any]:
         record.get("create_time") if record else None,
         record.get("start_mark") if record else None,
     )
+    view["live_trading"] = live_trading_view(unit, proc, record, alive)
     busy = flock_held(paths.lock_path(base, unit.id, proc)) is True
     phase = str(op.get("phase")) if op else ""
     if busy and op and phase not in TERMINAL_PHASES:

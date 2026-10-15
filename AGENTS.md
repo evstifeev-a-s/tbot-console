@@ -29,7 +29,9 @@ only if it is non-obvious, decision-changing and has no mechanical enforcement.
   Before finishing, search the diff for real unit names; every hit must go.
 - **Growth rule.** A module joins the platform only when a second repository needs it: the whole
   module with its tests, in one platform release, with the consumer's import rename in the same
-  bump PR. Nothing is added for a hypothetical consumer.
+  bump PR. Nothing is added for a hypothetical consumer. The one exception is Interactive
+  Brokers: everything that talks to IBKR is shared and lives in `connectors/ibkr/`, even while a
+  single unit needs it (owner's decision, 2026-10-15).
 - **Compatibility within a major.** Unit repos rely on: the manifest schema
   (`control/manifest.py`), the unit service protocol (`/api/<id>/health`, `/api/<id>/status`
   UnitStatus `v: 1`), the UI contract (`web/static/js/units/contract.d.ts`), the helper files a
@@ -38,9 +40,12 @@ only if it is non-obvious, decision-changing and has no mechanical enforcement.
   `core`, `analysis` and `connectors.ibkr`. Removing or changing any of them is a new major
   version; adding is a minor; a fix is a patch. The console lists a repo whose `.venv` holds
   another major as broken.
-- **No order-placing code.** The platform never places, edits or cancels orders. The IBKR
-  connector stays read-only; `procs.FILE_DROPPED_KEYS` keeps its live-trading switches out of
-  every process.
+- **Order code lives only in the IBKR trading client.** `IBKRTrader` in `connectors/ibkr/` is
+  the only code that places, changes or cancels orders; the read client `IBKRClient` cannot.
+  Without the live-trading switch the trader reaches a paper account only. The switch
+  (`IBKR_ALLOW_LIVE_TRADING`) is set by the console, per unit, for that unit's trading processes;
+  it never comes from an env file or a manifest (`procs.FILE_DROPPED_KEYS`, `control/live.py`).
+  Owner's decision, 2026-10-15.
 - **Process-control guarantees are a contract with live trading processes** that unit repos run
   under `tbot`: a trading process is never SIGKILLed, one operation per process at a time, pid +
   create-time identity, detached sessions, an allowlisted child environment, loopback-only
@@ -58,7 +63,7 @@ only if it is non-obvious, decision-changing and has no mechanical enforcement.
 |---|---|---|
 | `control/` | [README](src/tbot_console/control/README.md) | unit registry (home + `config/workspace.json` roots), process control run as detached executors, `tbot` CLI incl. `ui-links`; `service.py`, `status.py`, `logs.py`, `files.py` helpers for unit services |
 | `web/` | [README](src/tbot_console/web/README.md) | the console (FastAPI + vanilla JS): home page, `/api/control/*`, proxy to unit services, unit UI files served from each unit's repo |
-| `connectors/ibkr/` | [README](src/tbot_console/connectors/ibkr/README.md) | read-only Interactive Brokers client: quotes, bars, option chains, scanners |
+| `connectors/ibkr/` | [README](src/tbot_console/connectors/ibkr/README.md) | Interactive Brokers: the read client (quotes, bars, option chains, scanners, depth, tape) and the paper-first trading client `IBKRTrader` |
 | `core/` | — | `exceptions.py` (the error hierarchy the connector raises), `types.py` (`ServerType` and shared enums) |
 | `analysis/` | — | `models.py` (`Candle`, `Timeframe`, analysis result types), `robust.py` (`atr`, `theil_sen`, `mad_sigma`, `spearman_rho`) |
 | `testing.py` | — | helpers for unit repos' contract tests: `loopback_client`, `manifest_problems`, `manifest_modules`, `startup_imports`, `imported_modules` |

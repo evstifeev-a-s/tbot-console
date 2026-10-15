@@ -9,9 +9,19 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from types import TracebackType
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, TypeVar, overload
 
-from ib_async import IB, Contract, ContractDetails, ExecutionFilter, Fill, ScanData, Ticker, Trade
+from ib_async import (
+    IB,
+    Contract,
+    ContractDetails,
+    ExecutionFilter,
+    Fill,
+    Position,
+    ScanData,
+    Ticker,
+    Trade,
+)
 from ib_async.ib import StartupFetch
 from ib_async.objects import BarData, BarDataList, OptionComputation, ScanDataList
 from ib_async.wrapper import RequestError
@@ -27,11 +37,15 @@ from tbot_console.connectors.ibkr.instruments import (
 )
 from tbot_console.connectors.ibkr.models import (
     ContractSpec,
+    DepthExchange,
     IBKRExecution,
     IBKROrder,
+    IBKRPosition,
     IBKRQuote,
     OptionChainSpec,
     OptionGreeks,
+    TapePrint,
+    TapeQuote,
 )
 from tbot_console.connectors.ibkr.scanner import (
     MAX_ACTIVE_SCANS,
@@ -43,7 +57,37 @@ from tbot_console.connectors.ibkr.scanner import (
     filter_options,
     parse_scanner_parameters,
 )
-from tbot_console.core.exceptions import ExchangeConnectionError, ExchangeRequestError
+from tbot_console.connectors.ibkr.streams import (
+    DEFAULT_DEPTH_ROWS,
+    DEPTH_RESET,
+    DEPTH_TICK_TYPE,
+    PARTLY_SUBSCRIBED,
+    STREAM_CONFIRM_S,
+    TAPE_HISTORY,
+    TAPE_TICK_TYPES,
+    TICK_PAGE,
+    DepthWatch,
+    ErrorCallback,
+    StreamCallback,
+    StreamRefusedError,
+    StreamWatch,
+    TapeKind,
+    TapeWatch,
+    depth_book,
+    epoch,
+    exchange_from,
+    fresh_ticks,
+    history_from,
+    refusal_message,
+    second_of,
+    tape_from,
+    utc,
+)
+from tbot_console.core.exceptions import (
+    ConfigurationError,
+    ExchangeConnectionError,
+    ExchangeRequestError,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -329,6 +373,19 @@ def order_from_trade(trade: Trade) -> IBKROrder | None:
         account=order.account,
         oca_group=order.ocaGroup,
         placed_at=bar_timestamp(placed) if placed is not None else None,
+        ref=order.orderRef,
+    )
+
+
+def position_from(row: Position) -> IBKRPosition:
+    multiplier = _to_float(row.contract.multiplier)
+    cost = _to_float(row.avgCost)
+    return IBKRPosition(
+        account=row.account,
+        symbol=row.contract.symbol,
+        instrument=instrument_from_contract(row.contract),
+        shares=_to_float(row.position),
+        avg_price=cost / multiplier if multiplier > 1 else cost,
     )
 
 
@@ -373,6 +430,9 @@ class IBKRClient:
         self._contracts: dict[IBKRInstrument, Contract] = {}
         self._vocabulary: ScannerVocabulary | None = None
         self._watches: list[ScanWatch] = []
+        self._streams: list[StreamWatch] = []
+        self._stream_by_request: dict[int, StreamWatch] = {}
+        self._streams_hooked = False
         self._callback_tasks: set[asyncio.Task[Any]] = set()
 
     @property
@@ -388,6 +448,9 @@ class IBKRClient:
         return bool(self._ib.isConnected())
 
     async def connect(self) -> None:
+        await self._open(StartupFetch(0))
+
+    async def _open(self, fetch: StartupFetch) -> None:
         if self.is_connected:
             return
         cfg = self._config
@@ -399,7 +462,7 @@ class IBKRClient:
                 timeout=cfg.timeout,
                 readonly=cfg.readonly,
                 account=cfg.account,
-                fetchFields=StartupFetch(0),
+                fetchFields=fetch,
             )
         except (TimeoutError, OSError, RequestError) as exc:
             raise ExchangeConnectionError(
@@ -410,6 +473,8 @@ class IBKRClient:
         self._ib.reqMarketDataType(int(cfg.market_data_type))
 
     async def disconnect(self) -> None:
+        for stream in list(self._streams):
+            await self._stop_stream(stream)
         for watch in list(self._watches):
             await self.stop_scan(watch)
         if self.is_connected:
@@ -612,6 +677,17 @@ class IBKRClient:
         ]
         return sorted(out, key=lambda o: (o.placed_at or 0.0, o.order_id))
 
+    async def fetch_positions(self) -> list[IBKRPosition]:
+        asked = asyncio.wait_for(self._ib.reqPositionsAsync(), self._config.timeout or None)
+        rows = await self._request(asked, "positions")
+        account = self._config.account or ""
+        out = [
+            position_from(row)
+            for row in rows
+            if _to_float(row.position) != 0 and (not account or row.account == account)
+        ]
+        return sorted(out, key=lambda p: (p.account, p.symbol))
+
     async def fetch_option_chain(self, underlying: IBKRInstrument) -> list[OptionChainSpec]:
         spec = await self.qualify(underlying)
         fut_fop_exchange = (
@@ -685,7 +761,7 @@ class IBKRClient:
         )
 
         def on_update(data: ScanDataList) -> None:
-            self._deliver_scan(request, callback, data)
+            self._deliver("scan", request.scan_code, callback, hits_from_scan_data(data))
 
         rows.updateEvent += on_update
         watch = ScanWatch(request=request, rows=rows, handler=on_update)
@@ -703,20 +779,361 @@ class IBKRClient:
     def active_scans(self) -> tuple[ScanWatch, ...]:
         return tuple(self._watches)
 
-    def _deliver_scan(
-        self, request: ScanRequest, callback: ScanCallback, data: ScanDataList
+    def _deliver(
+        self, kind: str, target: str, callback: Callable[[Any], Any], payload: Any
     ) -> None:
         try:
-            result = callback(hits_from_scan_data(data))
+            result = callback(payload)
         except Exception:
-            LOG.exception("IBKR scan callback failed for %s", request.scan_code)
+            LOG.exception("IBKR %s callback failed for %s", kind, target)
             return
         if inspect.isawaitable(result):
             task = asyncio.ensure_future(result)
             self._callback_tasks.add(task)
-            task.add_done_callback(self._finish_scan_task)
+            task.add_done_callback(lambda done: self._finish_callback(kind, target, done))
 
-    def _finish_scan_task(self, task: asyncio.Task[Any]) -> None:
+    def _finish_callback(self, kind: str, target: str, task: asyncio.Task[Any]) -> None:
         self._callback_tasks.discard(task)
         if not task.cancelled() and task.exception() is not None:
-            LOG.error("IBKR scan callback raised: %r", task.exception())
+            LOG.error("IBKR %s callback raised for %s: %r", kind, target, task.exception())
+
+    @property
+    def active_streams(self) -> tuple[StreamWatch, ...]:
+        return tuple(self._streams)
+
+    def _require_live_feed(self, what: str) -> None:
+        feed = self._config.market_data_type
+        if feed in DELAYED_FEEDS:
+            raise ConfigurationError(
+                f"IBKR {what} needs real-time market data, but IBKR_MARKET_DATA_TYPE is "
+                f"{int(feed)} ({feed.name.lower()}): delayed data carries no depth and no tape. "
+                "Subscribe the account to real-time data for this exchange and set "
+                "IBKR_MARKET_DATA_TYPE=1"
+            )
+
+    def _reserve_stream(self, what: str, contract: Contract, family: str) -> None:
+        for stream in self._streams:
+            if stream.contract.conId == contract.conId and stream.family == family:
+                raise StreamRefusedError(
+                    f"IBKR {what}: this client already streams {stream.what}; stop that stream "
+                    "or keep using it"
+                )
+        limit = self._config.stream_limit
+        if len(self._streams) >= limit:
+            busy = ", ".join(stream.what for stream in self._streams)
+            raise StreamRefusedError(
+                f"IBKR {what} refused before asking IB: {len(self._streams)} of {limit} depth "
+                f"and tape streams are open ({busy}). IB serves 3 at once by default; stop one "
+                "with stop_depth or stop_tape, or raise IBKR_STREAM_LIMIT once the account has "
+                "quote boosters"
+            )
+
+    def _hook_streams(self) -> None:
+        if self._streams_hooked:
+            return
+        self._ib.errorEvent += self._on_stream_error
+        self._ib.disconnectedEvent += self._on_connection_lost
+        self._streams_hooked = True
+
+    def _request_id(self, ticker: Ticker, family: str) -> int:
+        return int(self._ib.wrapper.ticker2ReqId[family].get(ticker, 0))
+
+    def _register(self, watch: StreamWatch) -> None:
+        self._streams.append(watch)
+        if watch.req_id:
+            self._stream_by_request[watch.req_id] = watch
+
+    def _forget_stream(self, watch: StreamWatch) -> None:
+        watch.ticker.updateEvent -= watch.handler
+        if watch in self._streams:
+            self._streams.remove(watch)
+        if self._stream_by_request.get(watch.req_id) is watch:
+            del self._stream_by_request[watch.req_id]
+
+    async def _confirm(self, watch: StreamWatch) -> None:
+        wait = min(STREAM_CONFIRM_S, self._config.timeout or STREAM_CONFIRM_S)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(watch.settled), wait)
+        self._settle(watch)
+
+    def _settle(self, watch: StreamWatch) -> None:
+        if not watch.settled.done():
+            watch.settled.set_result(None)
+
+    def _fail_stream(self, watch: StreamWatch, error: ExchangeConnectionError) -> None:
+        watch.error = error
+        self._forget_stream(watch)
+        if not watch.settled.done():
+            watch.settled.set_exception(error)
+            return
+        LOG.error("%s", error)
+        if watch.on_error is not None:
+            self._deliver(
+                f"{watch.label} error", watch.instrument.to_routed(), watch.on_error, error
+            )
+
+    def _on_stream_error(
+        self, req_id: int, code: int, message: str, contract: Contract | None
+    ) -> None:
+        watch = self._stream_by_request.get(req_id)
+        if watch is None:
+            return
+        if code == DEPTH_RESET and isinstance(watch, DepthWatch):
+            watch.reset_at = len(watch.ticker.domTicks)
+            return
+        if code == PARTLY_SUBSCRIBED:
+            LOG.warning(
+                "IBKR %s: part of this data is not subscribed (error %d: %s)",
+                watch.what,
+                code,
+                message,
+            )
+            return
+        if is_notice(code):
+            return
+        failure = ExchangeRequestError(
+            refusal_message(watch.what, code, message), code=code, reason=message
+        )
+        self._fail_stream(watch, failure)
+
+    def _on_connection_lost(self) -> None:
+        for watch in list(self._streams):
+            self._fail_stream(
+                watch,
+                ExchangeConnectionError(
+                    f"IBKR connection lost: {watch.what} ended; subscribe again after connect()"
+                ),
+            )
+
+    async def _stop_stream(self, watch: StreamWatch) -> None:
+        known = watch in self._streams
+        self._forget_stream(watch)
+        self._settle(watch)
+        if not known or not self.is_connected:
+            return
+        if isinstance(watch, DepthWatch):
+            self._ib.cancelMktDepth(watch.contract, isSmartDepth=watch.smart)
+        else:
+            self._ib.cancelTickByTickData(watch.contract, watch.family)
+
+    async def watch_depth(
+        self,
+        instrument: IBKRInstrument,
+        callback: StreamCallback,
+        *,
+        rows: int = DEFAULT_DEPTH_ROWS,
+        smart: bool = False,
+        on_error: ErrorCallback | None = None,
+    ) -> DepthWatch:
+        what = f"depth of {instrument.to_routed()}"
+        self._require_live_feed(what)
+        if rows <= 0:
+            raise ValueError(f"{what}: rows must be positive, got {rows}")
+        if not smart and instrument.effective_exchange.upper() == "SMART":
+            raise ConfigurationError(
+                f"IBKR {what}: SMART is a router, not a book. Pass smart=True for one book "
+                "merged across the exchanges that send depth, or route the instrument to one "
+                f"exchange, e.g. {instrument.to_normalized()}@ISLAND"
+            )
+        contract = await self._qualified_contract(instrument)
+        self._reserve_stream(what, contract, DEPTH_TICK_TYPE)
+        self._hook_streams()
+        ticker = self._ib.reqMktDepth(contract, rows, smart)
+
+        def on_update(updated: Ticker) -> None:
+            self._on_depth(watch, updated)
+
+        watch = DepthWatch(
+            instrument=instrument,
+            contract=contract,
+            ticker=ticker,
+            rows=rows,
+            smart=smart,
+            req_id=self._request_id(ticker, DEPTH_TICK_TYPE),
+            callback=callback,
+            on_error=on_error,
+            handler=on_update,
+            settled=asyncio.get_running_loop().create_future(),
+        )
+        ticker.updateEvent += on_update
+        self._register(watch)
+        await self._confirm(watch)
+        return watch
+
+    async def stop_depth(self, watch: DepthWatch) -> None:
+        await self._stop_stream(watch)
+
+    def _on_depth(self, watch: DepthWatch, ticker: Ticker) -> None:
+        ticks = ticker.domTicks
+        reset = watch.reset_at
+        if reset is not None:
+            watch.book.clear()
+            watch.reset_at = None
+            ticks = ticks[reset:]
+        elif not ticks:
+            return
+        watch.book.apply(ticks)
+        self._settle(watch)
+        moment = ticker.time.timestamp() if ticker.time is not None else 0.0
+        book = depth_book(
+            watch.instrument.to_normalized(), watch.book, watch.rows, moment, watch.smart
+        )
+        self._deliver(watch.label, watch.instrument.to_routed(), watch.callback, book)
+
+    async def depth_exchanges(self) -> list[DepthExchange]:
+        asked = asyncio.wait_for(self._ib.reqMktDepthExchangesAsync(), self._config.timeout or None)
+        rows = await self._request(asked, "depth exchanges")
+        return sorted(map(exchange_from, rows), key=lambda row: (row.sec_type, row.exchange))
+
+    async def watch_tape(
+        self,
+        instrument: IBKRInstrument,
+        callback: StreamCallback,
+        *,
+        kind: TapeKind = "trades",
+        on_error: ErrorCallback | None = None,
+    ) -> TapeWatch:
+        if kind not in TAPE_TICK_TYPES:
+            raise ValueError(f"tape kind must be trades or quotes, got {kind!r}")
+        what = f"{kind} tape of {instrument.to_routed()}"
+        self._require_live_feed(what)
+        contract = await self._qualified_contract(instrument)
+        family = TAPE_TICK_TYPES[kind]
+        self._reserve_stream(what, contract, family)
+        self._hook_streams()
+        ticker = self._ib.reqTickByTickData(contract, family, 0, False)
+
+        def on_update(updated: Ticker) -> None:
+            self._on_tape(watch, updated)
+
+        watch = TapeWatch(
+            instrument=instrument,
+            contract=contract,
+            ticker=ticker,
+            kind=kind,
+            req_id=self._request_id(ticker, family),
+            callback=callback,
+            on_error=on_error,
+            handler=on_update,
+            settled=asyncio.get_running_loop().create_future(),
+        )
+        ticker.updateEvent += on_update
+        self._register(watch)
+        await self._confirm(watch)
+        return watch
+
+    async def stop_tape(self, watch: TapeWatch) -> None:
+        await self._stop_stream(watch)
+
+    def _on_tape(self, watch: TapeWatch, ticker: Ticker) -> None:
+        items = tape_from(watch.kind, watch.instrument.to_normalized(), ticker.tickByTicks)
+        if not items:
+            return
+        self._settle(watch)
+        for item in items:
+            self._deliver(watch.label, watch.instrument.to_routed(), watch.callback, item)
+
+    @overload
+    async def fetch_ticks(
+        self,
+        instrument: IBKRInstrument,
+        start: datetime,
+        end: datetime | None = None,
+        *,
+        kind: Literal["trades"] = "trades",
+        limit: int = TICK_PAGE,
+        rth_only: bool = False,
+    ) -> list[TapePrint]: ...
+
+    @overload
+    async def fetch_ticks(
+        self,
+        instrument: IBKRInstrument,
+        start: datetime,
+        end: datetime | None = None,
+        *,
+        kind: Literal["quotes"],
+        limit: int = TICK_PAGE,
+        rth_only: bool = False,
+    ) -> list[TapeQuote]: ...
+
+    async def fetch_ticks(
+        self,
+        instrument: IBKRInstrument,
+        start: datetime,
+        end: datetime | None = None,
+        *,
+        kind: TapeKind = "trades",
+        limit: int = TICK_PAGE,
+        rth_only: bool = False,
+    ) -> list[TapePrint] | list[TapeQuote]:
+        if kind not in TAPE_HISTORY:
+            raise ValueError(f"tape kind must be trades or quotes, got {kind!r}")
+        until = epoch(end) if end is not None else math.inf
+        if limit <= 0 or until < epoch(start):
+            return []
+        key = instrument.to_normalized()
+        what = f"{kind} history of {key}"
+        contract = await self._qualified_contract(instrument)
+        cursor = utc(start)
+        out: list[Any] = []
+        boundary, seen = -1, 0
+        while len(out) < limit:
+            asked = min(TICK_PAGE, limit - len(out) + seen)
+            page = await self._tick_page(
+                contract, what, cursor, asked, TAPE_HISTORY[kind], rth_only
+            )
+            fresh = fresh_ticks(page, lambda tick: epoch(tick.time), boundary, seen)
+            for tick in fresh:
+                item = history_from(kind, key, tick)
+                if item is None:
+                    continue
+                if item.time > until:
+                    return out
+                out.append(item)
+                if len(out) >= limit:
+                    return out
+            if len(page) < asked:
+                return out
+            last = second_of(epoch(page[-1].time))
+            if not fresh:
+                LOG.warning(
+                    "IBKR %s: more than %d ticks within the second %s; IB cannot page inside "
+                    "one second, so the rest of it is skipped",
+                    what,
+                    len(page),
+                    datetime.fromtimestamp(last, UTC).isoformat(),
+                )
+                last += 1
+                boundary, seen = -1, 0
+            else:
+                boundary = last
+                seen = sum(1 for tick in page if second_of(epoch(tick.time)) == last)
+            cursor = datetime.fromtimestamp(last, UTC)
+        return out
+
+    async def _tick_page(
+        self,
+        contract: Contract,
+        what: str,
+        cursor: datetime,
+        count: int,
+        show: str,
+        rth_only: bool,
+    ) -> list[Any]:
+        timeout = self._config.timeout * HISTORY_TIMEOUT_FACTOR
+        with self._errors() as errors:
+            ticks = await self._request(
+                asyncio.wait_for(
+                    self._ib.reqHistoricalTicksAsync(contract, cursor, "", count, show, rth_only),
+                    timeout or None,
+                ),
+                what,
+            )
+        failure = errors.by_contract.get(contract.conId)
+        if not ticks and failure is not None and not is_no_data(*failure):
+            code, message = failure
+            raise ExchangeRequestError(
+                f"IBKR rejected {what}: {message}", code=code, reason=message
+            )
+        return list(ticks)

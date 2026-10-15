@@ -10,6 +10,7 @@ from tbot_console.core.types import ServerType
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_CLIENT_ID = 17
 DEFAULT_TIMEOUT = 8.0
+DEFAULT_STREAM_LIMIT = 3
 
 LIVE_TRADING_ENV = "IBKR_ALLOW_LIVE_TRADING"
 
@@ -42,6 +43,10 @@ def default_port(gateway: Gateway, server_type: ServerType) -> int:
 
 def _env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() == "true"
+
+
+def live_trading_allowed() -> bool:
+    return _env_flag(LIVE_TRADING_ENV)
 
 
 def _env_int(name: str, fallback: int) -> int:
@@ -83,15 +88,18 @@ class IBKRConfig:
     readonly: bool = True
     timeout: float = DEFAULT_TIMEOUT
     market_data_type: MarketDataType = MarketDataType.DELAYED_FROZEN
+    stream_limit: int = DEFAULT_STREAM_LIMIT
 
     def __post_init__(self) -> None:
         if self.port <= 0:
             raise ConfigurationError(f"IBKR port must be positive, got {self.port}")
+        if self.stream_limit <= 0:
+            raise ConfigurationError(f"IBKR stream limit must be positive, got {self.stream_limit}")
         if self.readonly:
             return
         if self.is_paper_port and self.server_type is not ServerType.PRODUCTION:
             return
-        if not _env_flag(LIVE_TRADING_ENV):
+        if not live_trading_allowed():
             raise ConfigurationError(
                 "Refusing a writable IBKR session that is not provably against a paper "
                 f"account: port {self.port} ({self.server_type.value}), paper ports are "
@@ -120,4 +128,5 @@ class IBKRConfig:
             readonly=force_readonly or not _env_flag("IBKR_WRITABLE"),
             timeout=_env_float("IBKR_TIMEOUT", DEFAULT_TIMEOUT),
             market_data_type=_env_market_data_type("IBKR_MARKET_DATA_TYPE"),
+            stream_limit=_env_int("IBKR_STREAM_LIMIT", DEFAULT_STREAM_LIMIT),
         )

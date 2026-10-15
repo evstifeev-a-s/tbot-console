@@ -9,7 +9,7 @@ import time
 from importlib import resources
 from pathlib import Path
 
-from tbot_console.control import ops, paths, procs, state
+from tbot_console.control import live, ops, paths, procs, state
 from tbot_console.control.manifest import UnitManifest
 from tbot_console.control.registry import Registry, load_registry
 from tbot_console.control.status import duration
@@ -56,7 +56,7 @@ def cmd_ps(registry: Registry) -> int:
                     view["label"],
                     str(view["pid"] or ""),
                     duration(time.time() - view["since"]) if view["since"] else "",
-                    str(view["problem"] or ""),
+                    str(view["problem"] or _restart_hint(view)),
                 )
             )
     widths = [max(len(row[i]) for row in rows) for i in range(5)]
@@ -65,6 +65,44 @@ def cmd_ps(registry: Registry) -> int:
         print("  ".join([*cells, row[5]]).rstrip())
     for broken in registry.broken:
         print(f"ОШИБКА в {broken.file}: {broken.error}")
+    return 0
+
+
+def _restart_hint(view: dict[str, object]) -> str:
+    switch = view.get("live_trading")
+    return live.RESTART_HINT if isinstance(switch, dict) and switch.get("restart") else ""
+
+
+def _switch_line(unit: UnitManifest, current: dict[str, object]) -> str:
+    if not current["enabled"]:
+        return f"{unit.id}: заявки идут только на бумажный счёт (переключатель выключен)"
+    via = live.VIA_NAMES.get(str(current["via"]), "")
+    when = f", включён {current['changed_at']} {via}".rstrip() if current["changed_at"] else ""
+    return f"{unit.id}: разрешены заявки на ЖИВОМ счёте — на реальные деньги{when}"
+
+
+def cmd_live(home: Path, registry: Registry, target: str, action: str) -> int:
+    if ":" in target:
+        raise CliError(
+            "переключатель действует на всю стратегию: tbot live <стратегия> on|off|status"
+        )
+    unit = _targets(registry, target)[0][0]
+    if not unit.places_orders:
+        raise CliError(f"«{unit.id}» не ставит заявки — переключатель живой торговли ему не нужен")
+    if action == "status":
+        current = live.state(home, unit.id)
+    else:
+        current = live.change(home, unit.id, action == "on", "cli")
+    print(_switch_line(unit, current))
+    base = registry.base(unit)
+    for proc in unit.processes:
+        if not unit.trades(proc):
+            continue
+        view = state.process_view(base, unit, proc)
+        if _restart_hint(view):
+            print(f"{unit.id}:{proc}: {live.RESTART_HINT}: uv run tbot restart {unit.id}:{proc}")
+        elif action != "status" and view["state"] != "running":
+            print(f"{unit.id}:{proc}: действует со следующего запуска")
     return 0
 
 
@@ -208,6 +246,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "ui-links", help="ссылки на общие файлы консоли в js/ этого репо (для node --test и tsc)"
     )
+    switch = sub.add_parser(
+        "live",
+        help="заявки торговой стратегии на живом счёте: on — разрешить, off — только бумажный "
+        "счёт, status — посмотреть",
+    )
+    switch.add_argument("target")
+    switch.add_argument("action", choices=("on", "off", "status"))
     status = sub.add_parser("json", help="состояние в JSON")
     status.add_argument("target", nargs="?")
     return parser
@@ -251,6 +296,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_ui_links(home)
         if args.command == "json":
             return cmd_json(registry, args.target)
+        if args.command == "live":
+            return cmd_live(home, registry, args.target, args.action)
         if args.command == "_op":
             (unit, proc), *rest = _targets(registry, args.target)
             if rest:

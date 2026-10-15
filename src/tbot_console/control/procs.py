@@ -13,7 +13,7 @@ import psutil
 from dotenv import dotenv_values
 from pydantic import ValidationError
 
-from tbot_console.control import paths
+from tbot_console.control import live, paths
 from tbot_console.control.files import read_object
 from tbot_console.control.manifest import EnvFilesIgnore, ProcessSpec, UnitManifest
 from tbot_console.control.registry import Broken, parse_manifest
@@ -33,7 +33,7 @@ BASE_ENV = (
     "TZ",
 )
 FILE_DROPPED_KEYS = frozenset(
-    {"IBKR_ALLOW_LIVE_TRADING", "IBKR_WRITABLE", "TBOT_WEB_HOST", "TBOT_WEB_ALLOWED_HOSTS"}
+    {live.LIVE_TRADING_ENV, "IBKR_WRITABLE", "TBOT_WEB_HOST", "TBOT_WEB_ALLOWED_HOSTS"}
 )
 SUPERVISED_ENV = "TBOT_UNIT"
 UNREADABLE_MANIFEST = "файл не читается или в нём не JSON-объект"
@@ -107,6 +107,8 @@ def child_env(base: Path, unit: UnitManifest, proc: str) -> tuple[dict[str, str]
     )
     env.update(from_files)
     env.update(spec.env)
+    if unit.trades(proc) and live.enabled(paths.root(), unit.id):
+        env[live.LIVE_TRADING_ENV] = "true"
     if (port := unit.listen_port(proc)) is not None:
         env[PORT_ENV] = str(port)
     env[SUPERVISED_ENV] = unit.id
@@ -251,6 +253,14 @@ def cmdline(pid: int) -> list[str]:
         return psutil.Process(pid).cmdline()
     except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
         return []
+
+
+def env_flag(pid: int, key: str) -> bool | None:
+    try:
+        env = psutil.Process(pid).environ()
+    except (*UNREADABLE, ValueError):
+        return None
+    return env.get(key, "").strip().lower() == "true"
 
 
 def cwd_of(pid: int) -> Path | None:

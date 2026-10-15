@@ -10,6 +10,7 @@ import {
   stateLabel,
   unitTone,
 } from "./dashboard.js";
+import { confirmLiveTrading, createLiveSwitch, LIVE_RESTART_NOTE, liveBadge } from "./live.js";
 import { createProcessesPage } from "./processes.js";
 
 class FakeText {
@@ -599,5 +600,144 @@ describe("processes page", () => {
     const page = openPage({ unitId: "beta", get: async () => ({}) });
     page.update(unit("beta"));
     assert.match(page.root.textContent, /не управляет процессами/);
+  });
+});
+
+describe("live trading switch", () => {
+  const trading = (enabled, extra = {}) =>
+    unit("alpha", {
+      title: "Альфа",
+      places_orders: true,
+      live_trading: { enabled, changed_at: "2026-10-15T09:30:00+00:00", via: "console" },
+      processes: [proc()],
+      ...extra,
+    });
+
+  it("labels a trading unit's account next to its orders badge", () => {
+    const dashboard = createDashboard({ onAction: () => {} });
+    dashboard.update(
+      {
+        units: [trading(false), unit("beta", { kind: "monitor", places_orders: false })],
+        broken: [],
+      },
+      null,
+    );
+    const badges = byClass(dashboard.root, "dash-badge").map((n) => [n.className, n.textContent]);
+    assert.deepEqual(badges, [
+      ["dash-badge trades", "ставит заявки"],
+      ["dash-badge paper", "бумажный счёт"],
+    ]);
+    dashboard.update({ units: [trading(true)], broken: [] }, null);
+    const live = byClass(dashboard.root, "live")[0];
+    assert.equal(live.textContent, "ЖИВОЙ СЧЁТ");
+    assert.match(live.getAttribute("data-tip"), /реальные деньги/);
+    assert.equal(liveBadge(unit("beta")), null);
+    assert.equal(liveBadge(unit("alpha", { places_orders: true })).textContent, "бумажный счёт");
+  });
+
+  it("asks for a restart once the switch differs from what the process started with", () => {
+    const dashboard = createDashboard({ onAction: () => {} });
+    const stale = proc({ live_trading: { started: false, restart: true } });
+    dashboard.update({ units: [trading(true, { processes: [stale] })], broken: [] }, null);
+    const notes = byClass(dashboard.root, "proc-note");
+    assert.deepEqual(
+      notes.map((n) => [n.className, n.textContent]),
+      [["proc-note tone-warn", LIVE_RESTART_NOTE]],
+    );
+  });
+
+  it("shows the switch on the processes page and flips it through the callback", async () => {
+    const flips = [];
+    let release = () => {};
+    const page = createProcessesPage({
+      unitId: "alpha",
+      get: async () => ({}),
+      onAction: () => {},
+      signal: new AbortController().signal,
+      onLiveTrading: (target, enabled) => {
+        flips.push([target.id, enabled]);
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      },
+    });
+    page.update(unit("beta", { processes: [proc()] }));
+    const panel = byClass(page.root, "live-panel")[0];
+    assert.equal(panel.hidden, true);
+
+    page.update(trading(false));
+    assert.equal(panel.hidden, false);
+    const toggle = all(page.root, (n) => n.getAttribute("role") === "switch")[0];
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
+    assert.match(panel.textContent, /Сейчас: бумажный счёт/);
+    assert.match(panel.textContent, /Изменено .* в консоли\./);
+    toggle.click();
+    toggle.click();
+    assert.deepEqual(flips, [["alpha", true]]);
+    assert.equal(toggle.disabled, true);
+    release(true);
+    await flush();
+    assert.equal(toggle.disabled, false);
+
+    page.update(trading(true));
+    assert.equal(toggle.getAttribute("aria-checked"), "true");
+    assert.equal(panel.className, "panel live-panel on");
+    assert.match(panel.textContent, /Сейчас: ЖИВОЙ СЧЁТ/);
+    toggle.click();
+    assert.deepEqual(flips[1], ["alpha", false]);
+  });
+
+  it("warns plainly about real money before turning the switch on", async () => {
+    const pending = confirmLiveTrading({ unit: unit("alpha", { title: EVIL }) });
+    const dialog = document.body.children[0];
+    assert.match(dialog.textContent, /РЕАЛЬНЫЕ ДЕНЬГИ/);
+    assert.ok(dialog.textContent.includes(EVIL));
+    assert.equal(all(dialog, (n) => n.tagName === "IMG").length, 0);
+    all(dialog, (n) => n.getAttribute("data-role") === "apply")[0].click();
+    assert.equal(await pending, true);
+    const refused = confirmLiveTrading({ unit: unit("alpha") });
+    all(document.body, (n) => n.getAttribute("data-role") === "cancel")[0].click();
+    assert.equal(await refused, false);
+  });
+
+  it("confirms only the way to live, and reports what happened", async () => {
+    const sent = [];
+    const notes = [];
+    const asked = [];
+    let hurried = 0;
+    let answer = true;
+    const flip = createLiveSwitch({
+      send: async (path, body) => {
+        sent.push([path, body]);
+        if (body.enabled === false && sent.length > 2) throw new Error("409");
+        return { enabled: body.enabled };
+      },
+      confirm: async ({ unit: target }) => {
+        asked.push(target.id);
+        return answer;
+      },
+      notify: (text, tone) => notes.push([tone, text]),
+      hurry: () => {
+        hurried += 1;
+      },
+    });
+    answer = false;
+    assert.equal(await flip(trading(false), true), false);
+    assert.deepEqual(sent, []);
+    answer = true;
+    assert.equal(await flip(trading(false), true), true);
+    assert.equal(await flip(trading(true), false), true);
+    assert.deepEqual(asked, ["alpha", "alpha"]);
+    assert.deepEqual(sent, [
+      ["units/alpha/live-trading", { enabled: true }],
+      ["units/alpha/live-trading", { enabled: false }],
+    ]);
+    assert.equal(notes[0][0], "bad");
+    assert.match(notes[0][1], /ЖИВОМ счёте/);
+    assert.equal(notes[1][0], "ok");
+    assert.equal(await flip(trading(true), false), false);
+    assert.match(notes[2][1], /не изменён: 409/);
+    assert.equal(await flip(unit("beta"), true), false);
+    assert.equal(hurried, 3);
   });
 });

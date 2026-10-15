@@ -5,6 +5,7 @@
 .env.*
 !.env.example
 /config/workspace.json
+/config/live_trading.json
 /js/api.js
 /js/dom.js
 /js/util.js

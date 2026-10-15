@@ -12,9 +12,10 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, StrictBool
 from starlette.concurrency import run_in_threadpool
 
-from tbot_console.control import ops, paths, procs, state
+from tbot_console.control import live, ops, paths, procs, state
 from tbot_console.control.files import read_object
 from tbot_console.control.manifest import UnitManifest
 from tbot_console.control.registry import CONSOLE_ID, DISTRIBUTION, Registry, load_registry
@@ -31,6 +32,12 @@ router = APIRouter(prefix="/api/control")
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _generation = [0]
 _executors: list[subprocess.Popen[bytes]] = []
+
+
+class LiveTradingChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool
 
 
 def _forget_finished_executors() -> None:
@@ -100,6 +107,7 @@ async def units_payload() -> dict[str, Any]:
         run_in_threadpool(_views, registry),
         asyncio.gather(*(_status(unit) for unit in registry.units)),
     )
+    switches = live.entries(paths.root())
     payload = {
         "v": 1,
         "control": procs.POSIX,
@@ -112,6 +120,9 @@ async def units_payload() -> dict[str, Any]:
                 "processes": views[unit.id],
                 "status": status,
                 "status_error": error,
+                "live_trading": live.describe(switches.get(unit.id))
+                if unit.places_orders
+                else None,
             }
             for unit, (api, status, error) in zip(registry.units, statuses, strict=True)
         ],
@@ -170,6 +181,33 @@ async def act(unit_id: str, proc: str, action: str) -> dict[str, Any]:
     _generation[0] += 1
     _cache.clear()
     return {"op_id": op_id}
+
+
+def _trading_unit(unit_id: str) -> UnitManifest:
+    unit = load_registry().get(unit_id)
+    if unit is None:
+        raise HTTPException(status_code=404, detail=f"консоль не знает «{unit_id}»")
+    if not unit.places_orders:
+        raise HTTPException(
+            status_code=409,
+            detail=f"«{unit.title}» не ставит заявки — переключатель живой торговли ему не нужен",
+        )
+    return unit
+
+
+@router.get("/units/{unit_id}/live-trading")
+def get_live_trading(unit_id: str) -> dict[str, Any]:
+    unit = _trading_unit(unit_id)
+    return {"unit": unit.id, **live.state(paths.root(), unit.id)}
+
+
+@router.post("/units/{unit_id}/live-trading")
+def set_live_trading(unit_id: str, change: LiveTradingChange) -> dict[str, Any]:
+    unit = _trading_unit(unit_id)
+    current = live.change(paths.root(), unit.id, change.enabled, "console")
+    _generation[0] += 1
+    _cache.clear()
+    return {"unit": unit.id, **current}
 
 
 @router.get("/units/{unit_id}/processes/{proc}/output")

@@ -20,6 +20,7 @@ SHELL_MODULES = {
     "tbot_console",
     "tbot_console.control",
     "tbot_console.control.files",
+    "tbot_console.control.live",
     "tbot_console.control.logs",
     "tbot_console.control.manifest",
     "tbot_console.control.ops",
