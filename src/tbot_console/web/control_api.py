@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import time
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +18,10 @@ from starlette.concurrency import run_in_threadpool
 from tbot_console.control import live, ops, paths, procs, state
 from tbot_console.control.files import read_object
 from tbot_console.control.manifest import UnitManifest
-from tbot_console.control.registry import Registry, load_registry
+from tbot_console.control.registry import CONSOLE_ID, DISTRIBUTION, Registry, load_registry
 from tbot_console.web import proxy
 
+CONSOLE_VERSION = version(DISTRIBUTION)
 STATUS_TIMEOUT = httpx.Timeout(3.5, connect=0.5)
 UNITS_TTL_S = 3.0
 OP_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -113,6 +115,7 @@ async def units_payload() -> dict[str, Any]:
             {
                 **unit.model_dump(include=UNIT_FIELDS),
                 "glyph": unit.glyph or unit.id[:2].upper(),
+                "version": CONSOLE_VERSION if unit.id == CONSOLE_ID else None,
                 "api": api,
                 "processes": views[unit.id],
                 "status": status,

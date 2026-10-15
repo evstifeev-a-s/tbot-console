@@ -177,6 +177,7 @@ export function createProcessesPage({
 }) {
   const title = h("h2", { class: "view-title" }, "Процессы");
   const live = createLivePanel({ onToggle: onLiveTrading });
+  const version = h("p", { class: "view-sub proc-version", hidden: true });
   const note = h("div", { class: "panel empty", hidden: true });
   const tbody = h("tbody");
   const tablePanel = h(
@@ -214,6 +215,7 @@ export function createProcessesPage({
     "div",
     { class: "proc-page" },
     title,
+    version,
     h(
       "p",
       { class: "view-sub" },
@@ -232,6 +234,8 @@ export function createProcessesPage({
     if (!unit) return;
     title.textContent = `Процессы · ${unit.title}`;
     live.update(unit);
+    version.hidden = !unit.version;
+    version.textContent = unit.version ? `Версия консоли: ${unit.version}` : "";
     const processes = unit.processes || [];
     if (!processes.length) {
       note.hidden = false;

@@ -311,12 +311,15 @@ def runs_module(
     return any(Path(arg).name in names for arg in argv)
 
 
+UNREADABLE = (psutil.Error, OSError, SystemError)
+
+
 def _env_compatible(process: psutil.Process, wanted: dict[str, str]) -> bool:
     if not wanted:
         return True
     try:
         env = process.environ()
-    except (psutil.Error, OSError):
+    except UNREADABLE:
         return True
     return all(env.get(key, value) == value for key, value in wanted.items())
 
@@ -326,20 +329,27 @@ def find_instances(base: Path, spec: ProcessSpec, exclude: set[int] | None = Non
     skipped = {os.getpid(), *(exclude or set())}
     scripts = console_scripts(spec.module, root)
     found: list[int] = []
-    for process in psutil.process_iter(["pid", "cmdline", "cwd"]):
-        info = process.info
-        argv = info.get("cmdline") or []
-        if info["pid"] in skipped or not argv or "--check" in argv:
+    for process in psutil.process_iter():
+        if process.pid in skipped:
+            continue
+        try:
+            argv = process.cmdline()
+        except UNREADABLE:
+            continue
+        if not argv or "--check" in argv:
             continue
         if not Path(argv[0]).name.startswith("python"):
             continue
         if not runs_module(argv, spec.module, scripts):
             continue
-        cwd = info.get("cwd")
+        try:
+            cwd = process.cwd()
+        except UNREADABLE:
+            continue
         if not cwd or Path(cwd).resolve() != root:
             continue
         if _env_compatible(process, spec.env):
-            found.append(int(info["pid"]))
+            found.append(process.pid)
     return sorted(found)
 
 

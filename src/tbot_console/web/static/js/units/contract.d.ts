@@ -102,6 +102,7 @@ export interface UnitEntry {
   ui: string | null;
   places_orders: boolean;
   legacy_pages: string[];
+  version: string | null;
   api: UnitApi | null;
   processes: ProcessView[];
   status: UnitStatus | null;

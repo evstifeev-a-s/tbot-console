@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from importlib.metadata import version
 from pathlib import Path
 
 import httpx
@@ -36,6 +37,8 @@ class TestUnits:
         assert body["broken"] == []
         console_unit, alpha, beta = body["units"]
         assert console_unit["id"] == "console" and console_unit["kind"] == "system"
+        assert console_unit["version"] == version("tbot-console")
+        assert alpha["version"] is None and beta["version"] is None
         assert alpha["id"] == "alpha" and alpha["places_orders"] is True
         assert alpha["legacy_pages"] == ["old-page"]
         assert beta["legacy_pages"] == []
