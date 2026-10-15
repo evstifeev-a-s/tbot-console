@@ -36,7 +36,7 @@ def ib() -> FakeIB:
 
 
 async def test_open_orders_read_as_entry_stop_and_target_in_placing_order(ib: FakeIB):
-    entry = numbered(LimitOrder("BUY", 500, 2.5), 1)
+    entry = numbered(LimitOrder("BUY", 500, 2.5, orderRef="sig-7"), 1)
     stop = numbered(StopOrder("SELL", 500, 2.3), 2, parent_id=1)
     target = numbered(LimitOrder("SELL", 200, 3.1), 3, parent_id=1)
     ib.open_trades = [trade(target, minute=2), trade(entry, minute=0), trade(stop, minute=1)]
@@ -55,6 +55,7 @@ async def test_open_orders_read_as_entry_stop_and_target_in_placing_order(ib: Fa
         "Submitted",
     )
     assert (found[1].limit_price, found[1].stop_price, found[1].parent_id) == (None, 2.3, 1)
+    assert (first.ref, found[1].ref) == ("sig-7", "")
     assert first.instrument is not None and first.instrument.sec_type is SecType.STK
     assert first.placed_at == datetime(2026, 10, 7, 14, 0, tzinfo=UTC).timestamp()
     assert ib.open_order_calls == 1

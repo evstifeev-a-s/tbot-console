@@ -1,5 +1,6 @@
 import { h, replaceChildrenIfChanged, showConfirm } from "../dom.js";
 import { fmtDuration, fmtTime } from "../util.js";
+import { LIVE_RESTART_NOTE, liveBadge } from "./live.js";
 import { processBusy } from "./registry.js";
 import { unitHref } from "./route.js";
 
@@ -132,6 +133,7 @@ function processTime(proc, nowSec) {
 function processNotes(proc) {
   const notes = [];
   if (proc?.problem) notes.push({ text: String(proc.problem), tone: "bad" });
+  if (proc?.live_trading?.restart === true) notes.push({ text: LIVE_RESTART_NOTE, tone: "warn" });
   const op = proc?.op;
   if (op) {
     const action = pick(ACTION_NOUNS, op.action) || String(op.action ?? "");
@@ -322,6 +324,7 @@ function unitCard(unit, { nowSec, onAction }) {
       unit.places_orders
         ? h("span", { class: "dash-badge trades", "data-tip": TRADES_TIP }, "ставит заявки")
         : null,
+      liveBadge(unit),
     ),
     statusBlock(unit),
     body,

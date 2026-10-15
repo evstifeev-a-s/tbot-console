@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from tbot_console.connectors.ibkr.instruments import IBKRInstrument
 
@@ -74,6 +74,80 @@ class IBKROrder:
     account: str
     oca_group: str
     placed_at: float | None
+    ref: str = ""
+
+
+Side = Literal["buy", "sell"]
+OrderRole = Literal["entry", "stop", "target"]
+OrderEventKind = Literal["accepted", "partial", "filled", "cancelled", "rejected", "notice"]
+
+
+class Target(NamedTuple):
+    price: float
+    shares: int
+
+
+@dataclass(frozen=True, slots=True)
+class PlacedOrder:
+    order_id: int
+    perm_id: int
+    parent_id: int
+    ref: str
+    role: OrderRole
+    side: Side
+    order_type: str
+    shares: float
+    limit_price: float | None
+    stop_price: float | None
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlacedChain:
+    parent_id: int
+    legs: tuple[PlacedOrder, ...]
+    ref: str
+
+    def of_role(self, role: OrderRole) -> tuple[PlacedOrder, ...]:
+        return tuple(leg for leg in self.legs if leg.role == role)
+
+
+@dataclass(frozen=True, slots=True)
+class OrderEvent:
+    kind: OrderEventKind
+    order_id: int
+    perm_id: int
+    parent_id: int
+    ref: str
+    role: OrderRole
+    symbol: str
+    side: Side
+    shares: float
+    filled: float
+    remaining: float
+    avg_price: float | None
+    status: str
+    code: int | None
+    reason: str
+    time: float
+
+
+@dataclass(frozen=True, slots=True)
+class IBKRPosition:
+    account: str
+    symbol: str
+    instrument: IBKRInstrument | None
+    shares: float
+    avg_price: float
+
+
+@dataclass(frozen=True, slots=True)
+class MarginImpact:
+    init_margin_change: float | None
+    maint_margin_change: float | None
+    equity_with_loan_change: float | None
+    commission: float | None
+    warning: str
 
 
 @dataclass(frozen=True, slots=True)

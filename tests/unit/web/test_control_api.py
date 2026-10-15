@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tbot_console.control import paths, procs, state
+from tbot_console.control import live, paths, procs, state
 from tbot_console.control.files import write_json_atomic
 from tbot_console.web import control_api
 from tests.unit.control.helpers import fixture_manifest, write_manifest
@@ -196,3 +196,59 @@ class TestOutput:
     @pytest.mark.parametrize("op_id", ["../../etc", "0" * 31, "Z" * 32])
     def test_operation_ids_are_validated(self, console, op_id):
         assert console.get(f"/api/control/ops/{op_id}").status_code == 404
+
+
+class TestLiveTrading:
+    URL = "/api/control/units/alpha/live-trading"
+
+    def test_the_switch_is_off_until_turned_on(self, console):
+        assert console.get(self.URL).json() == {
+            "unit": "alpha",
+            "enabled": False,
+            "changed_at": None,
+            "via": None,
+        }
+        _, alpha, beta = console.get("/api/control/units").json()["units"]
+        assert alpha["live_trading"]["enabled"] is False
+        assert beta["live_trading"] is None
+
+    def test_turning_it_on_and_off_shows_at_once(self, console, root):
+        console.get("/api/control/units")
+        answer = console.post(self.URL, json={"enabled": True}, headers=CONSOLE)
+        assert answer.status_code == 200
+        assert answer.json()["enabled"] is True and answer.json()["via"] == "console"
+        assert live.enabled(root, "alpha")
+        alpha = console.get("/api/control/units").json()["units"][1]
+        assert alpha["live_trading"]["enabled"] is True
+        assert alpha["processes"][0]["live_trading"] == {"started": None, "restart": False}
+        assert alpha["processes"][1]["live_trading"] is None
+        console.post(self.URL, json={"enabled": False}, headers=CONSOLE)
+        assert not live.enabled(root, "alpha")
+        trail = paths.live_trading_log(root).read_text(encoding="utf-8").splitlines()
+        assert [line.rsplit(": ", 1)[1] for line in trail] == [
+            "заявки разрешены на ЖИВОМ счёте (в консоли)",
+            "заявки только на бумажный счёт (в консоли)",
+        ]
+
+    @pytest.mark.parametrize(
+        ("url", "code"),
+        [
+            ("/api/control/units/nope/live-trading", 404),
+            ("/api/control/units/beta/live-trading", 409),
+        ],
+    )
+    def test_unknown_and_non_trading_units_are_refused(self, console, root, url, code):
+        assert console.get(url).status_code == code
+        assert console.post(url, json={"enabled": True}, headers=CONSOLE).status_code == code
+        assert not paths.live_trading_file(root).exists()
+
+    @pytest.mark.parametrize(
+        "body", [{"enabled": "true"}, {"enabled": 1}, {}, {"enabled": True, "unit": "beta"}]
+    )
+    def test_only_a_plain_boolean_is_accepted(self, console, root, body):
+        assert console.post(self.URL, json=body, headers=CONSOLE).status_code == 422
+        assert not paths.live_trading_file(root).exists()
+
+    def test_a_foreign_page_cannot_flip_it(self, console, root):
+        assert console.post(self.URL, json={"enabled": True}).status_code == 403
+        assert not paths.live_trading_file(root).exists()

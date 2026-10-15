@@ -10,6 +10,7 @@ from tbot_console.connectors.ibkr.client import (
     hits_from_scan_data,
     instrument_from_contract,
     order_from_trade,
+    position_from,
 )
 from tbot_console.connectors.ibkr.config import (
     DEFAULT_STREAM_LIMIT,
@@ -19,6 +20,7 @@ from tbot_console.connectors.ibkr.config import (
     IBKRConfig,
     MarketDataType,
     default_port,
+    live_trading_allowed,
 )
 from tbot_console.connectors.ibkr.instruments import (
     DEFAULT_EXCHANGE,
@@ -27,6 +29,7 @@ from tbot_console.connectors.ibkr.instruments import (
     InstrumentSyntaxError,
     SecType,
 )
+from tbot_console.connectors.ibkr.journal import OrderJournal, read_journal
 from tbot_console.connectors.ibkr.models import (
     ContractSpec,
     DepthBook,
@@ -34,11 +37,26 @@ from tbot_console.connectors.ibkr.models import (
     DepthLevel,
     IBKRExecution,
     IBKROrder,
+    IBKRPosition,
     IBKRQuote,
+    MarginImpact,
     OptionChainSpec,
     OptionGreeks,
+    OrderEvent,
+    PlacedChain,
+    PlacedOrder,
     TapePrint,
     TapeQuote,
+    Target,
+)
+from tbot_console.connectors.ibkr.orders import (
+    LiveAccountError,
+    OrderCheckError,
+    OrderRejectedError,
+    account_kind,
+    mask_account,
+    plan_bracket,
+    price_step,
 )
 from tbot_console.connectors.ibkr.scanner import (
     MAX_ACTIVE_SCANS,
@@ -60,6 +78,7 @@ from tbot_console.connectors.ibkr.streams import (
     StreamRefusedError,
     TapeWatch,
 )
+from tbot_console.connectors.ibkr.trader import IBKRTrader, OrderWatch
 
 __all__ = [
     "BAR_SIZE",
@@ -84,11 +103,22 @@ __all__ = [
     "IBKRExecution",
     "IBKRInstrument",
     "IBKROrder",
+    "IBKRPosition",
     "IBKRQuote",
+    "IBKRTrader",
     "InstrumentSyntaxError",
+    "LiveAccountError",
+    "MarginImpact",
     "MarketDataType",
     "OptionChainSpec",
     "OptionGreeks",
+    "OrderCheckError",
+    "OrderEvent",
+    "OrderJournal",
+    "OrderRejectedError",
+    "OrderWatch",
+    "PlacedChain",
+    "PlacedOrder",
     "ScanHit",
     "ScanLocation",
     "ScanRequest",
@@ -101,6 +131,8 @@ __all__ = [
     "TapePrint",
     "TapeQuote",
     "TapeWatch",
+    "Target",
+    "account_kind",
     "build_contract",
     "build_subscription",
     "default_port",
@@ -110,6 +142,12 @@ __all__ = [
     "filter_options",
     "hits_from_scan_data",
     "instrument_from_contract",
+    "live_trading_allowed",
+    "mask_account",
     "order_from_trade",
     "parse_scanner_parameters",
+    "plan_bracket",
+    "position_from",
+    "price_step",
+    "read_journal",
 ]

@@ -1,6 +1,7 @@
 import { h, replaceChildrenIfChanged } from "../dom.js";
 import { fmtTimeFull } from "../util.js";
 import { ACTION_NOUNS, PHASE_LABELS, pick, processRows, refreshClock } from "./dashboard.js";
+import { createLivePanel } from "./live.js";
 
 const OUTPUT_LINES = 200;
 
@@ -161,6 +162,7 @@ function detailPanel(unitId, get, lastOp, signal) {
  *   onAction: (unit: any, proc: any, action: string) => void,
  *   signal: AbortSignal,
  *   lastOp?: (unitId: string, proc: string) => string | null,
+ *   onLiveTrading?: (unit: any, enabled: boolean) => Promise<unknown> | unknown,
  *   now?: () => number,
  * }} options
  */
@@ -170,9 +172,11 @@ export function createProcessesPage({
   onAction,
   signal,
   lastOp = () => null,
+  onLiveTrading = () => false,
   now = () => Date.now() / 1000,
 }) {
   const title = h("h2", { class: "view-title" }, "Процессы");
+  const live = createLivePanel({ onToggle: onLiveTrading });
   const note = h("div", { class: "panel empty", hidden: true });
   const tbody = h("tbody");
   const tablePanel = h(
@@ -215,6 +219,7 @@ export function createProcessesPage({
       { class: "view-sub" },
       "Из каких программ состоит служба, в каком они состоянии и что пишут в свой вывод. Таблица обновляется сама; вывод загружается по кнопке.",
     ),
+    live.node,
     note,
     tablePanel,
     details,
@@ -226,6 +231,7 @@ export function createProcessesPage({
   function update(unit) {
     if (!unit) return;
     title.textContent = `Процессы · ${unit.title}`;
+    live.update(unit);
     const processes = unit.processes || [];
     if (!processes.length) {
       note.hidden = false;

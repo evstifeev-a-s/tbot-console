@@ -11,7 +11,17 @@ from datetime import UTC, date, datetime
 from types import TracebackType
 from typing import Any, Literal, TypeVar, overload
 
-from ib_async import IB, Contract, ContractDetails, ExecutionFilter, Fill, ScanData, Ticker, Trade
+from ib_async import (
+    IB,
+    Contract,
+    ContractDetails,
+    ExecutionFilter,
+    Fill,
+    Position,
+    ScanData,
+    Ticker,
+    Trade,
+)
 from ib_async.ib import StartupFetch
 from ib_async.objects import BarData, BarDataList, OptionComputation, ScanDataList
 from ib_async.wrapper import RequestError
@@ -30,6 +40,7 @@ from tbot_console.connectors.ibkr.models import (
     DepthExchange,
     IBKRExecution,
     IBKROrder,
+    IBKRPosition,
     IBKRQuote,
     OptionChainSpec,
     OptionGreeks,
@@ -362,6 +373,19 @@ def order_from_trade(trade: Trade) -> IBKROrder | None:
         account=order.account,
         oca_group=order.ocaGroup,
         placed_at=bar_timestamp(placed) if placed is not None else None,
+        ref=order.orderRef,
+    )
+
+
+def position_from(row: Position) -> IBKRPosition:
+    multiplier = _to_float(row.contract.multiplier)
+    cost = _to_float(row.avgCost)
+    return IBKRPosition(
+        account=row.account,
+        symbol=row.contract.symbol,
+        instrument=instrument_from_contract(row.contract),
+        shares=_to_float(row.position),
+        avg_price=cost / multiplier if multiplier > 1 else cost,
     )
 
 
@@ -652,6 +676,17 @@ class IBKRClient:
             and (not account or o.account == account)
         ]
         return sorted(out, key=lambda o: (o.placed_at or 0.0, o.order_id))
+
+    async def fetch_positions(self) -> list[IBKRPosition]:
+        asked = asyncio.wait_for(self._ib.reqPositionsAsync(), self._config.timeout or None)
+        rows = await self._request(asked, "positions")
+        account = self._config.account or ""
+        out = [
+            position_from(row)
+            for row in rows
+            if _to_float(row.position) != 0 and (not account or row.account == account)
+        ]
+        return sorted(out, key=lambda p: (p.account, p.symbol))
 
     async def fetch_option_chain(self, underlying: IBKRInstrument) -> list[OptionChainSpec]:
         spec = await self.qualify(underlying)

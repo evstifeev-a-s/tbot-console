@@ -21,6 +21,14 @@ def workspace_file(base: Path) -> Path:
     return base / "config" / "workspace.json"
 
 
+def live_trading_file(base: Path) -> Path:
+    return base / "config" / "live_trading.json"
+
+
+def live_trading_log(base: Path) -> Path:
+    return base / "logs" / "live_trading.log"
+
+
 def ui_dir(base: Path, ui: str) -> Path:
     return base / "js" / "units" / ui
 

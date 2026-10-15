@@ -33,5 +33,11 @@ def test_the_template_modules_import_only_what_the_platform_ships() -> None:
 
 def test_the_template_keeps_local_files_out_of_git() -> None:
     ignored = set((TEMPLATE / ".gitignore").read_text(encoding="utf-8").split())
-    assert {".env", ".env.*", "!.env.example", "/config/workspace.json"} <= ignored
+    assert {
+        ".env",
+        ".env.*",
+        "!.env.example",
+        "/config/workspace.json",
+        "/config/live_trading.json",
+    } <= ignored
     assert {f"/{name}" for name in UI_LINKS} <= ignored

@@ -411,6 +411,12 @@ button.btn.primary:disabled {
 button.btn.ghost {
   background: transparent;
 }
+button.btn.danger {
+  background: var(--sell);
+  border-color: var(--sell);
+  color: #ffffff;
+  font-weight: 600;
+}
 
 .confirm-dialog {
   width: min(760px, 92vw);
@@ -457,6 +463,11 @@ button.btn.ghost {
 .confirm-note.warn {
   background: color-mix(in srgb, var(--warn) 18%, transparent);
   color: var(--text);
+}
+.confirm-note.danger {
+  background: color-mix(in srgb, var(--sell) 16%, transparent);
+  color: var(--text);
+  font-weight: 600;
 }
 .confirm-foot {
   display: flex;
@@ -793,6 +804,13 @@ a[data-tip] {
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 60%, transparent);
 }
+.dash-badge.live {
+  color: #ffffff;
+  background: var(--sell);
+  border-color: var(--sell);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
 .dash-status {
   display: flex;
   flex-direction: column;
@@ -943,6 +961,63 @@ table.grid tr:hover td {
 .proc-page .proc-panel {
   padding: 0;
   overflow-x: auto;
+}
+.live-panel.on {
+  border-color: var(--sell);
+  box-shadow: inset 4px 0 0 var(--sell);
+}
+.live-state {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.live-panel.on .live-state {
+  color: var(--sell);
+  font-weight: 600;
+}
+.live-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.live-switch:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+.live-switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background 0.15s;
+}
+.live-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.15s;
+}
+.live-switch[aria-checked="true"] .live-switch-track {
+  background: var(--sell);
+}
+.live-switch[aria-checked="true"] .live-switch-knob {
+  transform: translateX(16px);
+}
+.live-changed,
+.live-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
 }
 .proc-details {
   display: flex;

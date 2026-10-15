@@ -45,6 +45,10 @@ def _env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() == "true"
 
 
+def live_trading_allowed() -> bool:
+    return _env_flag(LIVE_TRADING_ENV)
+
+
 def _env_int(name: str, fallback: int) -> int:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -95,7 +99,7 @@ class IBKRConfig:
             return
         if self.is_paper_port and self.server_type is not ServerType.PRODUCTION:
             return
-        if not _env_flag(LIVE_TRADING_ENV):
+        if not live_trading_allowed():
             raise ConfigurationError(
                 "Refusing a writable IBKR session that is not provably against a paper "
                 f"account: port {self.port} ({self.server_type.value}), paper ports are "

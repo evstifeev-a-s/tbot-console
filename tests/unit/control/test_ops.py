@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from tbot_console.control import cli, ops, paths, procs, registry, state
+from tbot_console.connectors.ibkr.config import LIVE_TRADING_ENV
+from tbot_console.control import cli, live, ops, paths, procs, registry, state
 from tbot_console.control.files import read_object, write_json_atomic
 from tbot_console.control.manifest import ProcessSpec, UnitManifest
 from tbot_console.control.registry import load_registry
@@ -602,3 +603,34 @@ class TestEnvironment:
         target.write_text("\n".join(str(i) for i in range(5000)) + "\n")
         assert ops.tail_lines(target, 3) == ["4997", "4998", "4999"]
         assert ops.tail_lines(tmp_path / "missing", 3) == []
+
+
+class TestLiveTradingState:
+    def test_the_state_records_the_flag_and_asks_for_a_restart_after_a_change(
+        self, fake_root: Path
+    ):
+        write_manifest(fake_root, unit(check=True, places_orders=True))
+        live.change(fake_root, "demo", True, "console")
+        code, lines = run(fake_root, "start")
+        assert code == ops.EXIT_OK, lines
+        running = view(fake_root)
+        record = read_object(paths.state_path(fake_root, "demo", "main"))
+        assert record is not None and record["live_trading"] is True
+        assert procs.env_flag(running["pid"], LIVE_TRADING_ENV) is True
+        assert running["live_trading"] == {"started": True, "restart": False}
+
+        live.change(fake_root, "demo", False, "console")
+        assert view(fake_root)["live_trading"] == {"started": True, "restart": True}
+        assert cli.main(["ps"]) == 0
+
+        code, lines = run(fake_root, "restart")
+        assert code == ops.EXIT_OK, lines
+        restarted = view(fake_root)
+        assert restarted["live_trading"] == {"started": False, "restart": False}
+        assert procs.env_flag(restarted["pid"], LIVE_TRADING_ENV) is False
+        run(fake_root, "stop")
+        assert view(fake_root)["live_trading"] == {"started": None, "restart": False}
+
+    def test_a_process_that_does_not_trade_has_no_switch(self, fake_root: Path):
+        write_manifest(fake_root, unit())
+        assert view(fake_root)["live_trading"] is None

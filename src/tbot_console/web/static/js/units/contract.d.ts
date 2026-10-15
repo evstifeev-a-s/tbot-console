@@ -59,6 +59,11 @@ export interface ProcessOp {
   error: string | null;
 }
 
+export interface ProcessLiveTrading {
+  started: boolean | null;
+  restart: boolean;
+}
+
 export interface ProcessView {
   name: string;
   title: string;
@@ -72,6 +77,13 @@ export interface ProcessView {
   op: ProcessOp | null;
   problem: string | null;
   output: boolean;
+  live_trading: ProcessLiveTrading | null;
+}
+
+export interface LiveTradingSwitch {
+  enabled: boolean;
+  changed_at: string | null;
+  via: "console" | "cli" | null;
 }
 
 export interface UnitApi {
@@ -94,6 +106,7 @@ export interface UnitEntry {
   processes: ProcessView[];
   status: UnitStatus | null;
   status_error: string | null;
+  live_trading: LiveTradingSwitch | null;
 }
 
 export interface Registry {

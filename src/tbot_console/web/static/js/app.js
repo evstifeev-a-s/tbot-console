@@ -7,6 +7,7 @@ import {
   groupUnits,
   unitTone,
 } from "./shell/dashboard.js";
+import { createLiveSwitch } from "./shell/live.js";
 import { createLoader } from "./shell/loader.js";
 import { createProcessesPage } from "./shell/processes.js";
 import { createRegistry } from "./shell/registry.js";
@@ -54,6 +55,12 @@ const runAction = createActionRunner({
   send: (path) => control.send("POST", path),
   notify,
   remember: (unitId, proc, opId) => lastOps.set(`${unitId}:${proc}`, opId),
+  hurry: () => registry.hurry(),
+});
+
+const setLiveTrading = createLiveSwitch({
+  send: (path, body) => control.send("POST", path, body),
+  notify,
   hurry: () => registry.hurry(),
 });
 
@@ -355,6 +362,7 @@ function renderUnitPage(page, arg) {
       onAction: (target, proc, action) => runAction(target, proc, action, controller.signal),
       signal: controller.signal,
       lastOp: (unitId, proc) => lastOps.get(`${unitId}:${proc}`) || null,
+      onLiveTrading: (target, enabled) => setLiveTrading(target, enabled, controller.signal),
     });
     current.processes = processes;
     dom.view.append(processes.root);

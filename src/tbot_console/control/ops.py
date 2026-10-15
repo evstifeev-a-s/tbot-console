@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from tbot_console.control import paths, procs
+from tbot_console.control import live, paths, procs
 from tbot_console.control.files import read_object, write_json_atomic
 from tbot_console.control.manifest import ProcessSpec, UnitManifest
 from tbot_console.control.state import BusyError, foreign_pid, instances, transition_lock
@@ -269,6 +269,7 @@ class Operation:
         identity: dict[str, Any],
         *,
         adopted: bool,
+        live_trading: bool | None,
     ) -> None:
         write_json_atomic(
             self._state_file(),
@@ -280,6 +281,7 @@ class Operation:
                 "output": output,
                 "adopted": adopted,
                 "identity": identity,
+                "live_trading": live_trading,
             },
         )
 
@@ -310,7 +312,12 @@ class Operation:
         started_at = time.time()
         child = procs.spawn(argv, env, self.base, output)
         self._save(
-            child.pid, started_at, paths.relative(self.base, output), identity, adopted=False
+            child.pid,
+            started_at,
+            paths.relative(self.base, output),
+            identity,
+            adopted=False,
+            live_trading=env.get(live.LIVE_TRADING_ENV) == "true",
         )
         self.phase("waiting_ready")
         return self._wait_ready(child, identity, started_at, output)
@@ -454,5 +461,12 @@ class Operation:
             if stdout is not None
             else self.unit.output_path(self.proc)
         )
-        self._save(candidate, procs.create_time(candidate), output, identity, adopted=True)
+        self._save(
+            candidate,
+            procs.create_time(candidate),
+            output,
+            identity,
+            adopted=True,
+            live_trading=procs.env_flag(candidate, live.LIVE_TRADING_ENV),
+        )
         return f"принят под присмотр, процесс {candidate}"
