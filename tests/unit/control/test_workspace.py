@@ -10,6 +10,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
+import psutil
 import pytest
 
 from tbot_console.control import cli, ops, paths, procs, registry, state
@@ -338,6 +339,30 @@ class TestProcesses:
         spec = load_registry().get("beta").processes["main"]
         assert procs.find_instances(fake, spec) == [pid]
         assert procs.find_instances(home, spec) == []
+        assert cli.main(["stop", "beta"]) == ops.EXIT_OK
+
+    def test_a_process_the_system_refuses_to_describe_does_not_hide_the_unit(
+        self, home, fake, monkeypatch
+    ):
+        assert cli.main(["start", "beta"]) == ops.EXIT_OK
+        pid = read_object(paths.state_path(fake, "beta", "main"))["pid"]
+        bystander = subprocess.Popen(["sleep", "30"])
+        describe = psutil.Process.cmdline
+
+        def refusing(self: psutil.Process) -> list[str]:
+            if self.pid == bystander.pid:
+                raise SystemError("returned a result with an exception set")
+            return describe(self)
+
+        spec = load_registry().get("beta").processes["main"]
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(psutil.Process, "cmdline", refusing)
+                found = procs.find_instances(fake, spec)
+        finally:
+            bystander.kill()
+            bystander.wait()
+        assert found == [pid]
         assert cli.main(["stop", "beta"]) == ops.EXIT_OK
 
     def test_a_process_from_another_folder_is_never_adopted(self, home, fake):
