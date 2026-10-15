@@ -1,56 +1,25 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 
 import pytest
 
 from tbot_console.analysis.models import Timeframe
 from tbot_console.connectors.ibkr.client import IBKRClient
-from tbot_console.connectors.ibkr.config import IBKRConfig
 from tbot_console.connectors.ibkr.instruments import IBKRInstrument
 from tbot_console.connectors.ibkr.scanner import ScanRequest
 
+from .conftest import paper_client_id
+
 pytestmark = [pytest.mark.integration, pytest.mark.private]
 
-PROBE_TIMEOUT = 1.0
 SCAN_UPDATE_TIMEOUT = 20.0
-
-
-async def _port_is_open(host: str, port: int) -> bool:
-    try:
-        _, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port), timeout=PROBE_TIMEOUT
-        )
-    except (TimeoutError, OSError):
-        return False
-    writer.close()
-    await writer.wait_closed()
-    return True
-
-
-@pytest.fixture
-async def client() -> AsyncIterator[IBKRClient]:
-    config = IBKRConfig.from_env()
-    if not config.is_paper_port:
-        pytest.skip(f"IBKR integration runs against a paper gateway only, got port {config.port}")
-    if not await _port_is_open(config.host, config.port):
-        pytest.skip(
-            f"No IBKR gateway listening on {config.host}:{config.port} — "
-            "start TWS or IB Gateway in paper mode with the API enabled"
-        )
-
-    connected = IBKRClient(config)
-    await connected.connect()
-    try:
-        yield connected
-    finally:
-        await connected.disconnect()
 
 
 async def test_connects_readonly(client: IBKRClient):
     assert client.is_connected
     assert client.config.readonly
+    assert client.config.client_id == paper_client_id()
 
 
 async def test_qualifies_a_stock(client: IBKRClient):

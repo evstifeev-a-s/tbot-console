@@ -4,7 +4,8 @@ Read-only market-data client for **Interactive Brokers** over the TWS API, cover
 instrument classes IB is worth having for: US equities and ETFs, index and equity options
 (with greeks), futures and future options, FX, and cash indices. Plus **market scanners** —
 IB's server-side screener, the one call here that answers "which instruments match these
-conditions" rather than "what is this instrument doing".
+conditions" rather than "what is this instrument doing" — and the **order book and the tape**:
+real-time depth, every print and quote change as it happens, and the tape's history.
 
 **No WebSocket, no API key.** The TWS API is a length-prefixed binary stream over a plain TCP
 socket, reachable only through a **running TWS or IB Gateway** (`IBKR_HOST`, normally this
@@ -45,15 +46,17 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
   the stop trigger for a stop kind (the current trail stop for a trailing one), status, parent
   and OCA group, and the time IB logged it; IB's unset price reads as `None`; optionally for one
   `symbol`, only the configured `account` when one is set, in placing order; bounded by the
-  config's `timeout`; a read call that changes nothing), and the scanner:
-  `scan`, `scan_vocabulary`, `watch_scan`/`stop_scan`. Contract lookups are memoized per client
+  config's `timeout`; a read call that changes nothing), the scanner:
+  `scan`, `scan_vocabulary`, `watch_scan`/`stop_scan`, and depth and tape (below):
+  `watch_depth`/`stop_depth`, `depth_exchanges`, `watch_tape`/`stop_tape`, `fetch_ticks`,
+  `active_streams`. Contract lookups are memoized per client
   under the **whole `IBKRInstrument`** — routing and trading class included, because both change
   which contract IB resolves — and dropped on `disconnect`; the scanner vocabulary is kept across
   reconnects.
 - `IBKRInstrument` — the venue-neutral contract spec and the symbol layer; carries no `ib_async`
   types, so parsing and validation are testable without a gateway.
 - `IBKRConfig.from_env()` — `IBKR_HOST`, `IBKR_PORT`, `IBKR_CLIENT_ID`, `IBKR_ACCOUNT`,
-  `IBKR_TIMEOUT`, `IBKR_WRITABLE`, `IBKR_MARKET_DATA_TYPE`;
+  `IBKR_TIMEOUT`, `IBKR_WRITABLE`, `IBKR_MARKET_DATA_TYPE`, `IBKR_STREAM_LIMIT`;
   `from_env(force_readonly=True)` ignores `IBKR_WRITABLE`, so a read-only caller never trips the
   live-trading guard.
 - Every venue failure surfaces as `tbot_console.core.exceptions.ExchangeRequestError` (carrying
@@ -114,6 +117,83 @@ with `instrument=None` and the `con_id` intact.
 - **Limits**: IB serves at most **50 rows** per scan (`build_subscription` clamps and warns) and
   tolerates roughly **10 concurrent** scanner subscriptions (`watch_scan` warns past that).
 
+## Depth and tape
+
+Level 2 (the order book: every price someone bids or offers at, with its size), time and sales
+(every trade, or every change of the best bid and ask), and the tape's history.
+
+```python
+from datetime import UTC, datetime, timedelta
+
+from tbot_console.connectors.ibkr import IBKRClient, IBKRConfig, IBKRInstrument
+
+async with IBKRClient(IBKRConfig.from_env()) as client:          # IBKR_MARKET_DATA_TYPE=1
+    nasdaq = IBKRInstrument.parse("AAPL-USD-STK@ISLAND")        # ISLAND: Nasdaq TotalView
+    book = await client.watch_depth(nasdaq, on_book, rows=10)    # on_book(DepthBook)
+    tape = await client.watch_tape(nasdaq, on_print)             # on_print(TapePrint)
+    last_hour = await client.fetch_ticks(nasdaq, datetime.now(UTC) - timedelta(hours=1))
+    await client.stop_tape(tape)
+```
+
+- `watch_depth(instrument, callback, *, rows=10, smart=False, on_error=None)` → `DepthWatch`
+  (`reqMktDepth(contract, rows, smart)`). After every update batch the callback gets a
+  `DepthBook(symbol, bids, asks, time, smart)` of `DepthLevel(price, size, venue)`: bids best
+  (highest) first, asks best (lowest) first, at most `rows` per side; a level without a price or
+  a size is left out; `venue` is the market maker or exchange IB names (empty when it names
+  none). `smart=True` is IB's book merged over every exchange that sends this account depth
+  (`isSmartDepth`); without it the instrument must be routed to one exchange (`@ISLAND`,
+  `@NYSE`, `@ARCA`, …) — a SMART-routed one is refused before IB is asked. IB error 317 (the
+  book was reset) empties the book; the rows after it start a new one and nothing from before
+  the reset survives, not even rows of the same batch.
+- The client keeps each side as IB's rows itself, replaying `Ticker.domTicks` with the TWS API's
+  row semantics: insert shifts the rows below it down, delete shifts them up, update overwrites.
+  ib_async's own `domBids`/`domAsks` overwrite by row number on insert and delete, which leaves
+  stale rows after a level appears or vanishes mid-book, so they are not read.
+- `depth_exchanges()` → `list[DepthExchange]`: the exchanges that send depth
+  (`reqMktDepthExchanges`), sorted by security type and exchange.
+- `watch_tape(instrument, callback, *, kind="trades"|"quotes", on_error=None)` → `TapeWatch`
+  (`reqTickByTickData(contract, "AllLast" | "BidAsk", 0, False)`). The callback gets each
+  `TapePrint(symbol, time, price, size, venue, conditions, past_limit, unreported)` — every
+  trade, odd lots and off-exchange prints included — or `TapeQuote(symbol, time, bid, ask,
+  bid_size, ask_size)`, in arrival order. `time` is when the batch reached this process:
+  ib_async replaces IB's whole-second stamp with it. A non-positive price reads as `None` (an
+  absent side); a print without a price is dropped.
+- `fetch_ticks(instrument, start, end=None, *, kind="trades"|"quotes", limit=1000,
+  rth_only=False)` → the tape from `start` (a naive time is UTC), oldest first
+  (`reqHistoricalTicksAsync`). **IB serves at most 1000 ticks per request** (`TICK_PAGE`) and
+  stamps them to the whole second, so a longer stretch is paged: each next request starts at
+  the second of the last tick and skips the ticks of that second it already returned. A second
+  with more ticks than one request holds cannot be paged inside; the rest of that second is
+  skipped with a warning. Paging stops at `end`, at `limit` or when IB has nothing more, and
+  every page counts against IB's historical-data pacing (about 60 requests per 10 minutes).
+  `fetch_ticks` is history: it needs IB's data permissions, not the real-time feed setting.
+- Callbacks behave like `watch_scan`'s: sync or async; one that raises is logged and the stream
+  goes on.
+- **A refusal is an error, never silence.** `watch_*` waits up to `STREAM_CONFIRM_S` (1 s, or
+  the config's `timeout` if shorter) for IB to refuse the request and then raises
+  `ExchangeRequestError` with IB's code and a plain reading of it (`STREAM_REFUSALS`): 309 and
+  10190 (too many depth or tick-by-tick streams), 10092 (no depth for this security type on this
+  exchange), 354, 10089, 10168, 10186 (no market data subscription), 10189 (no tick-by-tick
+  subscription), 316 (depth halted), 10197 (the login is busy in a competing session). A
+  refusal after that window ends the stream: it is logged, `watch.error` is set, its slot is
+  freed and `on_error(error)` is called. 10090 (part of the data is not subscribed) and the
+  2100–2199 farm notices only warn. A lost connection ends every stream the same way with
+  `ExchangeConnectionError`; subscribe again after `connect()`. The readings come from IB's
+  error reference; only the integration suite against a gateway confirms them.
+- **Real time only.** Delayed data has no depth and no tape: with `IBKR_MARKET_DATA_TYPE` 3 or 4
+  both `watch_*` raise `ConfigurationError` saying a real-time subscription is needed, before
+  IB is asked.
+- **Three streams.** IB serves 3 depth and tick-by-tick streams at once by default (quote
+  boosters add more). The client counts its depth and tape streams together against
+  `IBKRConfig.stream_limit` (`IBKR_STREAM_LIMIT`, default 3) and refuses one more at once with
+  `StreamRefusedError` (an `ExchangeRequestError` without a code) naming the open ones. It
+  cannot see other clients' streams on the same login, and IB counts those too. One stream per
+  contract and kind per client: ib_async keeps one `Ticker` per contract, so a second depth, or
+  a second tape of the same kind, on the same contract is refused as well.
+- `stop_depth(watch)` / `stop_tape(watch)` cancel at IB once (a stream IB refused sends
+  nothing); `disconnect()` stops every depth, tape and scan stream; `active_streams` lists the
+  open depth and tape streams.
+
 ## Symbol grammar
 
 `SYMBOL-CURRENCY-SECTYPE[-EXPIRY[-STRIKE-RIGHT]][@EXCHANGE]`, an IB-shaped `BASE-QUOTE-KIND[…]`.
@@ -143,15 +223,21 @@ IB error 200.
 |---|---|
 | `instruments.py` | `SecType`, `IBKRInstrument` (frozen, validating), `parse`/`to_normalized`/`to_routed`, `DEFAULT_EXCHANGE`. No `ib_async` import |
 | `config.py` | `IBKRConfig` (+`from_env`), `Gateway`, `MarketDataType`, the `PORTS` table, the live-trading guard. No `ib_async` import |
-| `models.py` | Cold-path results: `IBKRQuote` (+`mid`/`spread`), `OptionGreeks`, `ContractSpec`, `OptionChainSpec` (+`nearest_strikes`) |
+| `models.py` | Cold-path results: `IBKRQuote` (+`mid`/`spread`), `OptionGreeks`, `ContractSpec`, `OptionChainSpec` (+`nearest_strikes`), `IBKRExecution`, `IBKROrder`, `DepthLevel`/`DepthBook`/`DepthExchange`, `TapePrint`/`TapeQuote` |
 | `scanner.py` | The scanner as pure logic: `ScanRequest`, `ScanHit`, `ScanType`/`ScanLocation`/`ScannerVocabulary`, `build_subscription` (the sentinel handling), `filter_options`, `parse_scanner_parameters` (the XML catalogue), `MAX_ROWS`/`MAX_ACTIVE_SCANS` |
+| `streams.py` | Depth and tape as pure logic: `apply_depth`/`BookState` (IB's row semantics), `depth_book`, `exchange_from`, `print_from_tick`/`quote_from_tick`/`quote_from_history`, `tape_from`/`history_from`, `fresh_ticks` (the paging dedupe), `STREAM_REFUSALS`/`refusal_message`, `StreamRefusedError`, `DepthWatch`/`TapeWatch`, `TICK_PAGE`, `STREAM_CONFIRM_S` |
 | `client.py` | `IBKRClient`; the ib_async↔ours row translation — `build_contract`, `instrument_from_contract`, `spec_from_details`, `candle_from_bar` (→ `analysis.models.Candle`), `quote_from_ticker`, `hits_from_scan_data`; `duration_for`, `duration_since`, `bar_timestamp`; `RequestErrors` (the per-call `errorEvent` listener), `is_notice`, `is_no_data`; `BAR_SIZE`, `WHAT_TO_SHOW`, `MAX_DURATION_DAYS`; `ScanWatch` |
 
 Unit tests: `tests/unit/connectors/ibkr/` (a `FakeIB` stands in for the gateway; scanner streaming
-is driven through `ScanDataList.updateEvent.emit`).
+is driven through `ScanDataList.updateEvent.emit`, depth and tape through `push(ticker, …)`,
+which fills `domTicks`/`tickByTicks` and emits the ticker's `updateEvent` as one batch).
 Integration: `tests/integration/connectors/ibkr/` — reads `IBKR_*` from the environment (paper
 defaults), probes the paper port and skips when nothing is listening; refuses to run against a
-live port at all. The scanner-catalogue XML shape is taken
+live port at all. It connects as client id `IBKR_TEST_CLIENT_ID` (default 9917), never as a
+unit's `IBKR_CLIENT_ID`: the gateway lets one connection hold an id, so sharing it would lock out
+whichever of the test and a running unit process connects second. Depth and tape tests skip, or
+assert the `ConfigurationError`, when the feed is delayed, and fail on a refusal whose IB code
+has no reading in `STREAM_REFUSALS`. The scanner-catalogue XML shape is taken
 from IB's documented schema and is only confirmed against a live gateway by
 `test_scanner_vocabulary_parses`, so run the integration suite once before trusting
 `scan_vocabulary` output.
@@ -191,6 +277,10 @@ opens a writable session and never places orders ([AGENTS.md](../../../../AGENTS
   unit is a whole day: asking for the last 120 one-minute bars still downloads the full day, so a
   refresh should pass `since=` instead (`duration_since`: calendar seconds back from now plus one
   bar, up to 86 400 s; beyond that whole days within the same cap).
+- **One `Ticker` per contract.** ib_async keys tickers by `conId`, so a contract's quotes, depth
+  and tape all update the same object and fire the same `updateEvent`. Each watch reads only its
+  own part of the batch (`domTicks` or its kind of `tickByTicks`), and errors are matched to a
+  stream by the request id ib_async keeps in `wrapper.ticker2ReqId`.
 - **ib_async swallows request errors.** With its default `RaiseRequestErrors = False` a failed
   request ends with an empty result and the error goes only to the log and `IB.errorEvent`. The
   client listens to `errorEvent` for the duration of each call (`RequestErrors`, keyed by request
@@ -221,8 +311,9 @@ opens a writable session and never places orders ([AGENTS.md](../../../../AGENTS
   live-account gate, and connects with the default `fetchFields` instead of `StartupFetch(0)` so
   positions, open orders and executions are synced at startup.
 - **Streaming quotes.** `IB.reqMktData` returns a `Ticker` that updates in place with an
-  `updateEvent`; bridge it to a plain callback the way `watch_scan` does. Add it when a second
-  repository needs it (the platform's growth rule).
+  `updateEvent`; bridge it to a plain callback the way `watch_tape` does (own the batch, read
+  only the ticks of your kind — a contract's `Ticker` is shared with its depth and tape). It
+  lands here even for one unit: everything IBKR is platform code ([AGENTS.md](../../../../AGENTS.md)).
 - **New instrument class.** Add a `SecType` member, a `WHAT_TO_SHOW` entry, and a
   `DEFAULT_EXCHANGE` entry if IB can route it without help. `instrument_from_contract` picks it up
   automatically, so scanner rows of that class stop coming back with `instrument=None`.
@@ -244,3 +335,5 @@ opens a writable session and never places orders ([AGENTS.md](../../../../AGENTS
   multiplier included, which is what keeps a weekly option (`SPXW`) from re-qualifying as the
   monthly. Use it for any IB response that hands back a contract, not just scanner rows.
 - `IBKRClient.qualify` memoizes `conId` lookups — call it rather than caching contracts yourself.
+- `BookState`/`apply_depth` for any depth feed (IB's row semantics and the reset), and
+  `fresh_ticks` for any whole-second paging of IB history.

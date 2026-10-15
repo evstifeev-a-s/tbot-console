@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
+from collections import defaultdict
+from datetime import UTC, datetime
 from typing import Any
 
 from eventkit import Event
@@ -8,24 +11,36 @@ from ib_async import Contract, ContractDetails, ScanData, ScannerSubscription, T
 from ib_async.objects import (
     BarData,
     BarDataList,
+    DepthMktDataDescription,
     ExecutionFilter,
     Fill,
+    MktDepthData,
     OptionChain,
     ScanDataList,
     TagValue,
 )
 from ib_async.order import Trade
 
+MOMENT = datetime(2026, 10, 15, 14, 30, tzinfo=UTC)
+
+
+class FakeWrapper:
+    def __init__(self) -> None:
+        self.ticker2ReqId: defaultdict[str, dict[Ticker, int]] = defaultdict(dict)
+
 
 class FakeIB:
     """Stand-in for ``ib_async.IB`` — records calls, replays canned responses.
 
     ``raise_on`` maps a stage name ("connect", "details", "tickers", "history",
-    "chain", "scan", "scanner_parameters", "executions", "orders") to the exception that stage should
-    raise, which is how the error mapping in ``IBKRClient`` gets exercised
-    without a gateway. ``history_errors``, ``ticker_errors`` (by conId) and
-    ``scan_errors`` are emitted on ``errorEvent`` the way ib_async reports a
-    failed request while still returning an empty result.
+    "chain", "scan", "scanner_parameters", "executions", "orders", "depth_exchanges",
+    "ticks") to the exception that stage should raise, which is how the error mapping
+    in ``IBKRClient`` gets exercised without a gateway. ``history_errors``,
+    ``ticker_errors`` (by conId), ``scan_errors`` and ``tick_errors`` are emitted on
+    ``errorEvent`` the way ib_async reports a failed request while still returning an
+    empty result. Depth and tape streams share one ``Ticker`` per conId as ib_async's do;
+    ``stream_errors`` (by tick type: "mktDepth", "AllLast", "BidAsk") is emitted on the
+    next loop turn after the request, as a refusal from the gateway arrives.
     """
 
     def __init__(self) -> None:
@@ -58,6 +73,18 @@ class FakeIB:
         self.execution_calls: list[ExecutionFilter] = []
         self.open_trades: list[Trade] = []
         self.open_order_calls = 0
+        self.wrapper = FakeWrapper()
+        self.disconnectedEvent = Event("disconnectedEvent")
+        self.stream_tickers: dict[int, Ticker] = {}
+        self.depth_calls: list[tuple[Contract, int, bool]] = []
+        self.depth_cancels: list[tuple[Contract, bool]] = []
+        self.tape_calls: list[tuple[Contract, str]] = []
+        self.tape_cancels: list[tuple[Contract, str]] = []
+        self.stream_errors: dict[str, tuple[int, str]] = {}
+        self.depth_venues: list[DepthMktDataDescription] = []
+        self.history_ticks: list[Any] = []
+        self.tick_calls: list[dict[str, Any]] = []
+        self.tick_errors: list[tuple[int, str]] = []
 
     def _req_id(self) -> int:
         self.last_req_id += 1
@@ -77,7 +104,10 @@ class FakeIB:
         self.connected = True
 
     def disconnect(self) -> None:
+        was_connected = self.connected
         self.connected = False
+        if was_connected:
+            self.disconnectedEvent.emit()
 
     def reqMarketDataType(self, market_data_type: int) -> None:
         self.market_data_type = market_data_type
@@ -174,6 +204,93 @@ class FakeIB:
 
     def cancelScannerSubscription(self, dataList: ScanDataList) -> None:
         self.cancelled_scans.append(dataList)
+
+    def _stream(self, contract: Contract, family: str) -> Ticker:
+        req_id = self._req_id()
+        ticker = self.stream_tickers.setdefault(contract.conId, Ticker(contract=contract))
+        self.wrapper.ticker2ReqId[family][ticker] = req_id
+        failure = self.stream_errors.get(family)
+        if failure is not None:
+            asyncio.get_running_loop().call_soon(self.errorEvent.emit, req_id, *failure, contract)
+        return ticker
+
+    def request_id(self, ticker: Ticker, family: str) -> int:
+        return self.wrapper.ticker2ReqId[family][ticker]
+
+    def reqMktDepth(
+        self,
+        contract: Contract,
+        numRows: int = 5,
+        isSmartDepth: bool = False,
+        mktDepthOptions: Any = None,
+    ) -> Ticker:
+        self.depth_calls.append((contract, numRows, isSmartDepth))
+        return self._stream(contract, "mktDepth")
+
+    def cancelMktDepth(self, contract: Contract, isSmartDepth: bool = False) -> None:
+        self.depth_cancels.append((contract, isSmartDepth))
+
+    def reqTickByTickData(
+        self,
+        contract: Contract,
+        tickType: str,
+        numberOfTicks: int = 0,
+        ignoreSize: bool = False,
+    ) -> Ticker:
+        self.tape_calls.append((contract, tickType))
+        return self._stream(contract, tickType)
+
+    def cancelTickByTickData(self, contract: Contract, tickType: str) -> bool:
+        self.tape_cancels.append((contract, tickType))
+        return True
+
+    async def reqMktDepthExchangesAsync(self) -> list[DepthMktDataDescription]:
+        self._maybe_raise("depth_exchanges")
+        return list(self.depth_venues)
+
+    async def reqHistoricalTicksAsync(
+        self,
+        contract: Contract,
+        startDateTime: datetime,
+        endDateTime: Any,
+        numberOfTicks: int,
+        whatToShow: str,
+        useRth: bool,
+        ignoreSize: bool = False,
+        miscOptions: Any = None,
+    ) -> list[Any]:
+        self.tick_calls.append(
+            {
+                "contract": contract,
+                "start": startDateTime,
+                "end": endDateTime,
+                "count": numberOfTicks,
+                "show": whatToShow,
+                "rth": useRth,
+            }
+        )
+        self._maybe_raise("ticks")
+        req_id = self._req_id()
+        for code, message in self.tick_errors:
+            self.errorEvent.emit(req_id, code, message, contract)
+        if self.tick_errors:
+            return []
+        start = math.floor(startDateTime.timestamp())
+        later = [tick for tick in self.history_ticks if tick.time.timestamp() >= start]
+        return later[:numberOfTicks]
+
+
+def push(ticker: Ticker, *, dom: Any = (), tape: Any = (), moment: datetime = MOMENT) -> None:
+    ticker.domTicks = list(dom)
+    ticker.tickByTicks = list(tape)
+    ticker.time = moment
+    ticker.updateEvent.emit(ticker)
+
+
+def depth_tick(
+    position: int, operation: int, side: int, price: float, size: float, venue: str = ""
+) -> MktDepthData:
+    return MktDepthData(MOMENT, position, venue, operation, side, price, size)
 
 
 def make_scan_data(rank: int, contract: Contract, distance: str = "") -> ScanData:

@@ -29,7 +29,9 @@ only if it is non-obvious, decision-changing and has no mechanical enforcement.
   Before finishing, search the diff for real unit names; every hit must go.
 - **Growth rule.** A module joins the platform only when a second repository needs it: the whole
   module with its tests, in one platform release, with the consumer's import rename in the same
-  bump PR. Nothing is added for a hypothetical consumer.
+  bump PR. Nothing is added for a hypothetical consumer. The one exception is Interactive
+  Brokers: everything that talks to IBKR is shared and lives in `connectors/ibkr/`, even while a
+  single unit needs it (owner's decision, 2026-10-15).
 - **Compatibility within a major.** Unit repos rely on: the manifest schema
   (`control/manifest.py`), the unit service protocol (`/api/<id>/health`, `/api/<id>/status`
   UnitStatus `v: 1`), the UI contract (`web/static/js/units/contract.d.ts`), the helper files a

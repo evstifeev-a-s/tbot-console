@@ -77,6 +77,53 @@ class IBKROrder:
 
 
 @dataclass(frozen=True, slots=True)
+class DepthLevel:
+    price: float
+    size: float
+    venue: str
+
+
+@dataclass(frozen=True, slots=True)
+class DepthBook:
+    symbol: str
+    bids: tuple[DepthLevel, ...]
+    asks: tuple[DepthLevel, ...]
+    time: float
+    smart: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DepthExchange:
+    exchange: str
+    sec_type: str
+    listing_exchange: str
+    service_data_type: str
+    agg_group: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class TapePrint:
+    symbol: str
+    time: float
+    price: float
+    size: float
+    venue: str
+    conditions: str
+    past_limit: bool
+    unreported: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TapeQuote:
+    symbol: str
+    time: float
+    bid: float | None
+    ask: float | None
+    bid_size: float
+    ask_size: float
+
+
+@dataclass(frozen=True, slots=True)
 class ContractSpec:
     instrument: IBKRInstrument
     con_id: int

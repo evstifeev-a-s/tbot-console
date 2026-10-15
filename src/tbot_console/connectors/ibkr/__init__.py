@@ -12,6 +12,7 @@ from tbot_console.connectors.ibkr.client import (
     order_from_trade,
 )
 from tbot_console.connectors.ibkr.config import (
+    DEFAULT_STREAM_LIMIT,
     LIVE_TRADING_ENV,
     PORTS,
     Gateway,
@@ -28,11 +29,16 @@ from tbot_console.connectors.ibkr.instruments import (
 )
 from tbot_console.connectors.ibkr.models import (
     ContractSpec,
+    DepthBook,
+    DepthExchange,
+    DepthLevel,
     IBKRExecution,
     IBKROrder,
     IBKRQuote,
     OptionChainSpec,
     OptionGreeks,
+    TapePrint,
+    TapeQuote,
 )
 from tbot_console.connectors.ibkr.scanner import (
     MAX_ACTIVE_SCANS,
@@ -47,17 +53,31 @@ from tbot_console.connectors.ibkr.scanner import (
     filter_options,
     parse_scanner_parameters,
 )
+from tbot_console.connectors.ibkr.streams import (
+    STREAM_REFUSALS,
+    TICK_PAGE,
+    DepthWatch,
+    StreamRefusedError,
+    TapeWatch,
+)
 
 __all__ = [
     "BAR_SIZE",
     "DEFAULT_EXCHANGE",
+    "DEFAULT_STREAM_LIMIT",
     "GRAMMAR",
     "LIVE_TRADING_ENV",
     "MAX_ACTIVE_SCANS",
     "MAX_ROWS",
     "PORTS",
+    "STREAM_REFUSALS",
+    "TICK_PAGE",
     "WHAT_TO_SHOW",
     "ContractSpec",
+    "DepthBook",
+    "DepthExchange",
+    "DepthLevel",
+    "DepthWatch",
     "Gateway",
     "IBKRClient",
     "IBKRConfig",
@@ -77,6 +97,10 @@ __all__ = [
     "ScanWatch",
     "ScannerVocabulary",
     "SecType",
+    "StreamRefusedError",
+    "TapePrint",
+    "TapeQuote",
+    "TapeWatch",
     "build_contract",
     "build_subscription",
     "default_port",

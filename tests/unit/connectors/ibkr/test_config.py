@@ -20,6 +20,7 @@ IBKR_ENV = (
     "IBKR_TIMEOUT",
     "IBKR_WRITABLE",
     "IBKR_MARKET_DATA_TYPE",
+    "IBKR_STREAM_LIMIT",
     LIVE_TRADING_ENV,
 )
 
@@ -164,4 +165,14 @@ class TestFromEnv:
         monkeypatch.setenv("IBKR_WRITABLE", "true")
         monkeypatch.setenv("IBKR_PORT", "7496")
         with pytest.raises(ConfigurationError, match=LIVE_TRADING_ENV):
+            IBKRConfig.from_env()
+
+    def test_the_stream_limit_defaults_to_three_and_can_be_raised(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        assert IBKRConfig.from_env().stream_limit == 3
+        monkeypatch.setenv("IBKR_STREAM_LIMIT", "13")
+        assert IBKRConfig.from_env().stream_limit == 13
+        monkeypatch.setenv("IBKR_STREAM_LIMIT", "0")
+        with pytest.raises(ConfigurationError, match="stream limit must be positive"):
             IBKRConfig.from_env()
