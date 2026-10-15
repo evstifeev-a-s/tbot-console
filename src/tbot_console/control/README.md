@@ -86,6 +86,9 @@ Guarantees an operation gives, whatever starts it (console button or CLI):
   is the op log `run/ops/<op_id>.log` of the unit's repo;
 - identity is pid plus psutil create-time plus a cwd in the unit's repo (`procs.owned()`), so a
   reused pid is never signalled and a copied folder's `run/` state never signals the original;
+  on macOS the create-time is the kernel's raw value, because psutil ≥ 7.1 shifts it in a
+  long-lived process by every clock step since import and the console would then see its own
+  processes as exited;
 - `check: true` processes run `<repo python> -m <module> --check` first (one JSON object: `ok`,
   `summary`, `checks`, `identity` with lock, descriptor and `lock_holder`); a failed check
   refuses a start, and on restart it runs before the stop, so a bad config leaves a running bot

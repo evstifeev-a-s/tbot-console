@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 from importlib.metadata import EntryPoint, distributions, entry_points
+from operator import attrgetter
 from pathlib import Path
 
 import psutil
@@ -183,9 +184,15 @@ def spawn(argv: list[str], env: dict[str, str], cwd: Path, output: Path) -> subp
         )
 
 
+def _started(process: psutil.Process) -> float:
+    if sys.platform == "darwin":
+        return float(attrgetter("_proc")(process).create_time(monotonic=True))
+    return process.create_time()
+
+
 def create_time(pid: int) -> float | None:
     try:
-        return psutil.Process(pid).create_time()
+        return _started(psutil.Process(pid))
     except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
         return None
 
@@ -197,7 +204,7 @@ def is_alive(pid: int | None, started: float | None) -> bool:
         process = psutil.Process(pid)
         if process.status() == psutil.STATUS_ZOMBIE:
             return False
-        created = process.create_time()
+        created = _started(process)
     except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
         return False
     return started is None or abs(created - started) <= CREATE_TIME_TOLERANCE
