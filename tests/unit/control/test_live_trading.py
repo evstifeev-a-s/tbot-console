@@ -76,6 +76,20 @@ class TestSwitchFile:
         live.change(root, "alpha", False, "cli")
         assert switch_file(root)["units"]["alpha"]["enabled"] is False
 
+    @pytest.mark.parametrize("error", [SystemError("NULL result"), PermissionError("hidden")])
+    def test_an_environment_the_os_hides_reads_as_unknown(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception
+    ):
+        class Hidden:
+            def __init__(self, pid: int) -> None:
+                self.pid = pid
+
+            def environ(self) -> dict[str, str]:
+                raise error
+
+        monkeypatch.setattr(procs.psutil, "Process", Hidden)
+        assert procs.env_flag(4242, LIVE_TRADING_ENV) is None
+
     def test_the_variable_is_the_one_the_connector_reads(self):
         assert live.LIVE_TRADING_ENV == LIVE_TRADING_ENV
         assert LIVE_TRADING_ENV in procs.FILE_DROPPED_KEYS

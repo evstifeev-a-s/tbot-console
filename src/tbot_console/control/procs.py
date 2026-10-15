@@ -258,7 +258,7 @@ def cmdline(pid: int) -> list[str]:
 def env_flag(pid: int, key: str) -> bool | None:
     try:
         env = psutil.Process(pid).environ()
-    except (psutil.Error, OSError, ValueError):
+    except (*UNREADABLE, ValueError):
         return None
     return env.get(key, "").strip().lower() == "true"
 
