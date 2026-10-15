@@ -14,6 +14,7 @@ from tbot_console.control import paths
 from tbot_console.control.manifest import UnitManifest
 
 DISTRIBUTION = "tbot-console"
+CONSOLE_ID = "console"
 CONSOLE_PORT = 8420
 MEMO_TTL_S = 3.0
 WORKSPACE_FILE = "config/workspace.json"
@@ -55,7 +56,7 @@ class Workspace(BaseModel):
 def console_manifest(port: int = CONSOLE_PORT) -> UnitManifest:
     return UnitManifest.model_validate(
         {
-            "id": "console",
+            "id": CONSOLE_ID,
             "kind": "system",
             "title": "Консоль",
             "glyph": "◎",
