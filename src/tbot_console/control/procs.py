@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 from importlib.metadata import EntryPoint, distributions, entry_points
+from operator import attrgetter
 from pathlib import Path
 
 import psutil
@@ -41,6 +42,7 @@ PORT_ENV = "TBOT_PORT"
 OUTPUT_ROTATE_BYTES = 20 * 1024 * 1024
 OUTPUT_KEEP = 3
 CREATE_TIME_TOLERANCE = 0.05
+KERNEL_START_PLATFORMS = ("linux", "darwin")
 
 
 class ControlUnsupportedError(RuntimeError):
@@ -183,28 +185,55 @@ def spawn(argv: list[str], env: dict[str, str], cwd: Path, output: Path) -> subp
         )
 
 
+def _kernel_start(process: psutil.Process) -> float:
+    return float(attrgetter("_proc")(process).create_time(monotonic=True))
+
+
+def _wall_start(process: psutil.Process) -> float:
+    if sys.platform == "darwin":
+        return _kernel_start(process)
+    return process.create_time()
+
+
+def _start_mark(process: psutil.Process) -> float:
+    if sys.platform in KERNEL_START_PLATFORMS:
+        return _kernel_start(process)
+    return process.create_time()
+
+
 def create_time(pid: int) -> float | None:
     try:
-        return psutil.Process(pid).create_time()
+        return _wall_start(psutil.Process(pid))
     except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
         return None
 
 
-def is_alive(pid: int | None, started: float | None) -> bool:
+def start_mark(pid: int) -> float | None:
+    try:
+        return _start_mark(psutil.Process(pid))
+    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+        return None
+
+
+def is_alive(pid: int | None, started: float | None, mark: float | None = None) -> bool:
     if not pid:
         return False
     try:
         process = psutil.Process(pid)
         if process.status() == psutil.STATUS_ZOMBIE:
             return False
-        created = process.create_time()
+        if mark is not None:
+            return abs(_start_mark(process) - mark) <= CREATE_TIME_TOLERANCE
+        created = _wall_start(process)
     except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
         return False
     return started is None or abs(created - started) <= CREATE_TIME_TOLERANCE
 
 
-def owned(base: Path, pid: int | None, started: float | None) -> bool:
-    return pid is not None and is_alive(pid, started) and cwd_of(pid) in (None, base.resolve())
+def owned(base: Path, pid: int | None, started: float | None, mark: float | None = None) -> bool:
+    return (
+        pid is not None and is_alive(pid, started, mark) and cwd_of(pid) in (None, base.resolve())
+    )
 
 
 def terminate(pid: int) -> None:

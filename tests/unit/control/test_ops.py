@@ -197,6 +197,9 @@ class TestLifecycle:
         assert running["output"] is True
         pid = running["pid"]
         assert procs.runs_module(procs.cmdline(pid), "fakeunit")
+        record = read_object(paths.state_path(fake_root, "demo", "main"))
+        assert record is not None
+        assert record["start_mark"] == procs.start_mark(pid)
         code, lines = run(fake_root, "stop")
         assert code == ops.EXIT_OK, lines
         stopped = view(fake_root)

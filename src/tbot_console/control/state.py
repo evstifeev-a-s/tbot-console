@@ -144,7 +144,12 @@ def process_view(base: Path, unit: UnitManifest, proc: str) -> dict[str, Any]:
         "output": output.is_file(),
     }
     pid = record.get("pid") if record else None
-    alive = procs.owned(base, pid, record.get("create_time") if record else None)
+    alive = procs.owned(
+        base,
+        pid,
+        record.get("create_time") if record else None,
+        record.get("start_mark") if record else None,
+    )
     busy = flock_held(paths.lock_path(base, unit.id, proc)) is True
     phase = str(op.get("phase")) if op else ""
     if busy and op and phase not in TERMINAL_PHASES:

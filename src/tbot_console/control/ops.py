@@ -232,7 +232,9 @@ class Operation:
         return read_object(self._state_file()) or {}
 
     def _alive(self, current: dict[str, Any]) -> bool:
-        return procs.owned(self.base, current.get("pid"), current.get("create_time"))
+        return procs.owned(
+            self.base, current.get("pid"), current.get("create_time"), current.get("start_mark")
+        )
 
     def _check(self, *, before: str, strict: bool = True) -> CheckResult:
         self.phase("checking")
@@ -273,6 +275,7 @@ class Operation:
             {
                 "pid": pid,
                 "create_time": procs.create_time(pid),
+                "start_mark": procs.start_mark(pid),
                 "started_at": started_at,
                 "output": output,
                 "adopted": adopted,
@@ -358,7 +361,7 @@ class Operation:
 
     def _mark_stopped(self) -> None:
         current = self._current()
-        current.update(pid=None, create_time=None)
+        current.update(pid=None, create_time=None, start_mark=None)
         write_json_atomic(self._state_file(), current)
 
     def _stop(self) -> str:
