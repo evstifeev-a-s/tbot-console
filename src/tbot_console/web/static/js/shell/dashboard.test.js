@@ -582,6 +582,19 @@ describe("processes page", () => {
     assert.match(text, /строка 1\nстрока 2/);
   });
 
+  it("shows the console version only for a unit that reports one", () => {
+    const page = openPage({ unitId: "console", get: async () => ({}) });
+    page.update(
+      unit("console", { kind: "system", version: "1.4.2", processes: [proc({ name: "web" })] }),
+    );
+    const line = byClass(page.root, "proc-version")[0];
+    assert.equal(line.hidden, false);
+    assert.equal(line.textContent, "Версия консоли: 1.4.2");
+    page.update(unit("alpha", { version: null, processes: [proc()] }));
+    assert.equal(line.hidden, true);
+    assert.equal(line.textContent, "");
+  });
+
   it("explains a unit the console does not manage", () => {
     const page = openPage({ unitId: "beta", get: async () => ({}) });
     page.update(unit("beta"));
