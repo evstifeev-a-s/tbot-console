@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from tbot_console.core.exceptions import ConnectionTimeoutError, ExchangeConnectionError
+from tbot_console.core.exceptions import ExchangeConnectionError
 
-_TRANSIENT_EXCEPTIONS = (ExchangeConnectionError, ConnectionTimeoutError)
+_TRANSIENT_EXCEPTIONS = (ExchangeConnectionError,)
 
 
 @pytest.hookimpl(hookwrapper=True)
