@@ -40,8 +40,9 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
 ```
 
 - `IBKRClient` — `connect`/`disconnect` (also an async context manager), `qualify`,
-  `fetch_quote`/`fetch_quotes`, `fetch_bars` (the last `count` bars, or with `since=` only the
-  bars from that moment on, asked in seconds while the span is under a day — the cheap way to
+  `fetch_quote`/`fetch_quotes` (the contracts a call has not seen yet are looked up
+  concurrently), `fetch_bars` (the last `count` bars, or with `since=` every bar from that moment
+  on whatever `count` says, asked in seconds while the span is under a day — the cheap way to
   refresh a series you already hold), `fetch_option_chain`, `fetch_executions` (the account's
   fills IB reports — the current trading day unless TWS keeps more — as `IBKRExecution`:
   `buy`/`sell`, shares, price, epoch time, order and perm ids, optionally for one `symbol` and
@@ -76,7 +77,9 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
   raises `ExchangeConnectionError` for a history IB never answered within the timeout;
   `fetch_quotes` leaves out (and logs with its code) an instrument whose snapshot IB refused, so
   a refused quote is never read as a live one. Notices are not failures: 165, 10090 (partly
-  subscribed), 10167 (delayed data shown) and the 2100–2199 farm-status messages.
+  subscribed), 10167 (delayed data shown) and the 2100–2199 farm-status messages — except that
+  ib_async ends a snapshot on 10090, so an instrument whose snapshot 10090 cut short before any
+  price arrived is left out and logged rather than reported with no prices.
 
 ## Scanners
 
@@ -180,7 +183,8 @@ async with IBKRClient(IBKRConfig.from_env()) as client:          # IBKR_MARKET_D
 - Callbacks behave like `watch_scan`'s: sync or async; one that raises is logged and the stream
   goes on.
 - **A refusal is an error, never silence.** `watch_*` waits up to `STREAM_CONFIRM_S` (1 s, or
-  the config's `timeout` if shorter) for IB to refuse the request and then raises
+  the config's `timeout` if shorter) for IB to refuse the request — a refusal that lands as the
+  wait runs out still counts — and then raises
   `ExchangeRequestError` with IB's code and a plain reading of it (`STREAM_REFUSALS`): 309 and
   10190 (too many depth or tick-by-tick streams), 10092 (no depth for this security type on this
   exchange), 354, 10089, 10168, 10186 (no market data subscription), 10189 (no tick-by-tick

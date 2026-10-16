@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
-from ib_async import IB, ContractDetails
+from ib_async import IB, Contract, ContractDetails
 from ib_async.objects import OptionChain, OptionComputation
 from ib_async.wrapper import RequestError
 
@@ -27,7 +27,7 @@ from tbot_console.connectors.ibkr.instruments import IBKRInstrument, SecType
 from tbot_console.connectors.ibkr.scanner import ScanRequest
 from tbot_console.core.exceptions import ExchangeConnectionError, ExchangeRequestError
 
-from .conftest import FakeIB, make_bar, make_contract, make_details, make_ticker
+from .conftest import MOMENT, FakeIB, make_bar, make_contract, make_details, make_ticker
 
 NAN = float("nan")
 
@@ -255,6 +255,47 @@ class TestQuotes:
 
         assert set(quotes) == {"AAPL-USD-STK"}
         assert "error 10197" in caplog.text
+
+    async def test_a_snapshot_cut_short_by_a_partial_subscription_is_skipped(
+        self, client: IBKRClient, ib: FakeIB, caplog: pytest.LogCaptureFixture
+    ):
+        apple = make_contract("AAPL", 265598)
+        index = make_contract("SPX", 416904, sec_type="OPT", multiplier="100")
+        ib.details_by_symbol = {"AAPL": [make_details(apple)], "SPX": [make_details(index)]}
+        ib.tickers = [make_ticker(apple, bid=190.0, time=MOMENT), make_ticker(index)]
+        partly = (10090, "Part of requested market data is not subscribed")
+        ib.ticker_errors = {265598: partly, 416904: partly}
+
+        with caplog.at_level(logging.WARNING):
+            quotes = await client.fetch_quotes([SPX_CALL, AAPL])
+
+        assert set(quotes) == {"AAPL-USD-STK"}
+        assert quotes["AAPL-USD-STK"].bid == 190.0
+        assert "error 10090" in caplog.text and "SPX" in caplog.text
+
+    async def test_instruments_are_looked_up_at_once(
+        self, client: IBKRClient, ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+    ):
+        symbols = ["AAPL", "MSFT", "NVDA"]
+        contracts = {symbol: make_contract(symbol, 1000 + n) for n, symbol in enumerate(symbols)}
+        ib.details_by_symbol = {s: [make_details(c)] for s, c in contracts.items()}
+        ib.tickers = [make_ticker(c, bid=1.0) for c in contracts.values()]
+        lookup = ib.reqContractDetailsAsync
+        in_flight: list[str] = []
+        peak: list[int] = []
+
+        async def slow(contract: Contract) -> list[ContractDetails]:
+            in_flight.append(contract.symbol)
+            peak.append(len(in_flight))
+            await asyncio.sleep(0.01)
+            in_flight.remove(contract.symbol)
+            return await lookup(contract)
+
+        monkeypatch.setattr(ib, "reqContractDetailsAsync", slow)
+        instruments = [IBKRInstrument.parse(f"{symbol}-USD-STK") for symbol in symbols]
+        quotes = await client.fetch_quotes([*instruments, instruments[0]])
+        assert set(quotes) == {f"{symbol}-USD-STK" for symbol in symbols}
+        assert max(peak) == len(symbols)
 
     async def test_a_delayed_data_notice_keeps_the_quote(self, client: IBKRClient, ib: FakeIB):
         apple = make_contract("AAPL", 265598)
@@ -490,6 +531,17 @@ class TestBars:
         duration = ib.history_calls[0]["durationStr"]
         assert duration.endswith(" S") and int(duration.split()[0]) <= 180
         assert [candle.timestamp for candle in candles] == [since.timestamp()]
+
+    async def test_bars_since_a_moment_are_all_returned_past_count(
+        self, client: IBKRClient, ib: FakeIB
+    ):
+        since = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(hours=3)
+        ib.bars = [make_bar(since + timedelta(minutes=minute)) for minute in range(181)]
+
+        candles = await client.fetch_bars(AAPL, Timeframe.M1, since=since)
+
+        assert len(candles) == 181
+        assert candles[0].timestamp == since.timestamp()
 
     async def test_rejection_carries_the_code(self, client: IBKRClient, ib: FakeIB):
         ib.raise_on["history"] = RequestError(3, 162, "Historical Market Data Service error")

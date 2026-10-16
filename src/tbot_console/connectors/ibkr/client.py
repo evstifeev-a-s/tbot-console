@@ -150,8 +150,11 @@ def is_no_data(code: int, message: str) -> bool:
 class RequestErrors:
     by_request: dict[int, tuple[int, str]] = field(default_factory=dict)
     by_contract: dict[int, tuple[int, str]] = field(default_factory=dict)
+    partial: dict[int, str] = field(default_factory=dict)
 
     def __call__(self, req_id: int, code: int, message: str, contract: Contract | None) -> None:
+        if code == PARTLY_SUBSCRIBED and contract is not None and contract.conId:
+            self.partial.setdefault(contract.conId, message)
         if is_notice(code):
             return
         self.by_request.setdefault(req_id, (code, message))
@@ -588,13 +591,20 @@ class IBKRClient:
         if not instruments:
             return {}
 
+        unique = list(dict.fromkeys(instruments))
+        found = await asyncio.gather(
+            *(self._qualified_contract(instrument) for instrument in unique),
+            return_exceptions=True,
+        )
         pairs: list[tuple[str, Contract]] = []
-        for instrument in instruments:
+        for instrument, contract in zip(unique, found, strict=True):
             key = instrument.to_normalized()
-            try:
-                pairs.append((key, await self._qualified_contract(instrument)))
-            except ExchangeRequestError as exc:
-                LOG.warning("IBKR quote skipped for %s: %s", key, exc)
+            if isinstance(contract, ExchangeRequestError):
+                LOG.warning("IBKR quote skipped for %s: %s", key, contract)
+            elif isinstance(contract, BaseException):
+                raise contract
+            else:
+                pairs.append((key, contract))
 
         if not pairs:
             return {}
@@ -612,8 +622,18 @@ class IBKRClient:
                 LOG.warning("IBKR quote skipped for %s: error %d: %s", key, *failure)
                 continue
             ticker = by_con_id.get(contract.conId)
-            if ticker is not None:
-                quotes[key] = quote_from_ticker(key, ticker)
+            if ticker is None:
+                continue
+            partly = errors.partial.get(contract.conId)
+            if partly is not None and ticker.time is None:
+                LOG.warning(
+                    "IBKR quote skipped for %s: error %d: %s (the snapshot ended before any price)",
+                    key,
+                    PARTLY_SUBSCRIBED,
+                    partly,
+                )
+                continue
+            quotes[key] = quote_from_ticker(key, ticker)
         return quotes
 
     async def fetch_bars(
@@ -656,7 +676,7 @@ class IBKRClient:
         candles = [candle_from_bar(bar) for bar in bars]
         if since is not None:
             start = bar_timestamp(since)
-            candles = [candle for candle in candles if candle.timestamp >= start]
+            return [candle for candle in candles if candle.timestamp >= start]
         return candles[-count:] if count > 0 else candles
 
     def _raise_for_empty_history(
@@ -888,6 +908,9 @@ class IBKRClient:
         wait = min(STREAM_CONFIRM_S, self._config.timeout or STREAM_CONFIRM_S)
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(asyncio.shield(watch.settled), wait)
+        refusal = watch.settled.exception() if watch.settled.done() else None
+        if refusal is not None:
+            raise refusal
         self._settle(watch)
 
     def _settle(self, watch: StreamWatch) -> None:
