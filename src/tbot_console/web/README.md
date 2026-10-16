@@ -74,7 +74,7 @@ files are served unauthenticated; security headers (CSP plus `control.service.SE
 nosniff, DENY, no-referrer) go on every response, proxied ones included; `app.main()` refuses a
 non-loopback bind without a token. Under `tbot` the console takes no address from an env file
 (`procs.FILE_DROPPED_KEYS`), so it listens on loopback; a hand start (`uv run tbot-web`) reads
-`.env` whole. Unit services have no token of their own and `control.service.serve()` refuses any
+`.env` whole except the trading switches (`procs.TRADING_SWITCH_KEYS`). Unit services have no token of their own and `control.service.serve()` refuses any
 non-loopback bind.
 
 `__init__.py` is empty — consumers import submodules directly. FastAPI and uvicorn are core

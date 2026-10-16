@@ -130,10 +130,11 @@ Guarantees an operation gives, whatever starts it (console button or CLI):
   `PYTHONUNBUFFERED`, `PYTHONFAULTHANDLER`; the console's own environment is not inherited. The dropped keys
   (`procs.env_file_policy()`) are the union of `env_files_ignore` (`prefixes`, `keys`) over every
   non-hidden `config/units/*.json` file of the unit's repo, read raw so a manifest the registry
-  refuses still counts, plus the platform constant `FILE_DROPPED_KEYS` (`IBKR_ALLOW_LIVE_TRADING`,
-  `IBKR_WRITABLE` — the switches of the platform's own IBKR connector — and
-  `TBOT_WEB_HOST`/`TBOT_WEB_ALLOWED_HOSTS`, so an env file cannot open the console to the
-  network; `TBOT_WEB_TOKEN` is a credential and passes). A unit with `env_files_only` (`prefixes`,
+  refuses still counts, plus the platform constant `FILE_DROPPED_KEYS` (`TRADING_SWITCH_KEYS` =
+  `IBKR_ALLOW_LIVE_TRADING`, `IBKR_WRITABLE` — the switches of the platform's own IBKR connector —
+  and `TBOT_WEB_HOST`/`TBOT_WEB_ALLOWED_HOSTS`, so an env file cannot open the console to the
+  network; `TBOT_WEB_TOKEN` is a credential and passes). A key is matched in upper case, so
+  `ibkr_allow_live_trading` is dropped too (Windows upper-cases environment names). A unit with `env_files_only` (`prefixes`,
   `keys`) then keeps only the admitted keys of what is left; the rest is skipped silently, never
   listed as dropped, so the drop list is the same with or without the filter (the console admits
   only `TBOT_WEB_TOKEN`). `procs.file_env(base, unit, *files)` applies both steps and is shared by
@@ -146,7 +147,8 @@ Guarantees an operation gives, whatever starts it (console button or CLI):
   `procs.load_env_file(unit=None)`, which the console and `service.serve()` (with its `unit`) call
   and any unit process may call, loads `<paths.root()>/.env` (`override=False`; never a `.env`
   found by walking up parent folders) only for a hand start, so the dropped keys stay dropped.
-  Without a unit it loads the whole file (the console); with one it validates
+  Without a unit it loads the whole file except `TRADING_SWITCH_KEYS` (what the hand-started
+  console needs, its `TBOT_WEB_*` included); with one it validates
   `config/units/<unit>.json` (`registry.parse_manifest`: its id must match the file name) and
   loads only what `file_env()` passes for that unit; a missing or invalid manifest, or an
   `EnvPolicyError`, is a `SystemExit` «…; .env не загружен» before anything is loaded;

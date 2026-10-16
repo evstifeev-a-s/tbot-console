@@ -32,9 +32,8 @@ BASE_ENV = (
     "TMPDIR",
     "TZ",
 )
-FILE_DROPPED_KEYS = frozenset(
-    {live.LIVE_TRADING_ENV, "IBKR_WRITABLE", "TBOT_WEB_HOST", "TBOT_WEB_ALLOWED_HOSTS"}
-)
+TRADING_SWITCH_KEYS = frozenset({live.LIVE_TRADING_ENV, "IBKR_WRITABLE"})
+FILE_DROPPED_KEYS = TRADING_SWITCH_KEYS | {"TBOT_WEB_HOST", "TBOT_WEB_ALLOWED_HOSTS"}
 SUPERVISED_ENV = "TBOT_UNIT"
 UNREADABLE_MANIFEST = "файл не читается или в нём не JSON-объект"
 PORT_ENV = "TBOT_PORT"
@@ -92,7 +91,8 @@ def file_env(base: Path, unit: UnitManifest, *files: Path) -> tuple[dict[str, st
         for key, value in dotenv_values(path).items():
             if value is None:
                 continue
-            if key.startswith(prefixes) or key in keys:
+            name = key.upper()
+            if name.startswith(prefixes) or name in keys:
                 dropped.add(key)
             elif only is None or only.admits(key):
                 env[key] = value
@@ -134,9 +134,9 @@ def load_env_file(unit: str | None = None) -> None:
         return
     base = paths.root()
     if unit is None:
-        from dotenv import load_dotenv
-
-        load_dotenv(base / ".env", override=False)
+        for key, value in dotenv_values(base / ".env").items():
+            if value is not None and key.upper() not in TRADING_SWITCH_KEYS:
+                os.environ.setdefault(key, value)
         return
     try:
         values, _ = file_env(base, _hand_start_unit(base, unit), base / ".env")
