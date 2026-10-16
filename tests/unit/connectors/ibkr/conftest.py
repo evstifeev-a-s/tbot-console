@@ -68,6 +68,10 @@ class FakeIB:
     ``errorEvent``). ``fill`` executes shares; it models IBKR's bracket rule that the
     children of one parent form one OCA group reduced by each fill, so a child that fills
     lifts its siblings by the same amount and one that reaches zero is cancelled.
+    ``modify_error`` answers a change with a warning (``ValidationError``) and
+    ``modify_refusal`` with an error, which ib_async turns into a local ``Cancelled`` although
+    the order still works. ``cancelOrder`` on an order still ``PendingSubmit`` follows ib_async:
+    ``Cancelled`` at once when it was never transmitted, ``PendingCancel`` otherwise.
     """
 
     def __init__(self) -> None:
@@ -124,6 +128,7 @@ class FakeIB:
         self.answer_orders = True
         self.reject_when: list[Rule] = []
         self.modify_error: tuple[int, str] | None = None
+        self.modify_refusal: tuple[int, str] | None = None
         self.position_rows: list[Position] = []
         self.what_if_state: OrderState | None = None
         self.what_if_errors: list[tuple[int, str]] = []
@@ -257,6 +262,9 @@ class FakeIB:
         if self.modify_error is not None:
             self.fail(trade, *self.modify_error, warning=True)
             return trade
+        if self.modify_refusal is not None:
+            self.fail(trade, *self.modify_refusal)
+            return trade
         trade.order.lmtPrice = order.lmtPrice
         trade.order.auxPrice = order.auxPrice
         trade.order.totalQuantity = order.totalQuantity
@@ -268,6 +276,9 @@ class FakeIB:
         self.cancel_calls.append(order.orderId)
         trade = self.own_trades.get(order.orderId)
         if trade is None or trade.isDone():
+            return trade
+        if trade.orderStatus.status == OrderStatus.PendingSubmit and order.transmit:
+            self.set_status(trade, OrderStatus.PendingCancel)
             return trade
         self.set_status(trade, OrderStatus.Cancelled)
         if not trade.order.parentId and trade.orderStatus.filled == 0:

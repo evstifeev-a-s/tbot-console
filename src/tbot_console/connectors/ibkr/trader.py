@@ -117,6 +117,7 @@ class IBKRTrader:
         self._finished: set[int] = set()
         self._filled: dict[int, float] = {}
         self._status_errors: set[tuple[int, int]] = set()
+        self._changing: set[int] = set()
 
     @property
     def client(self) -> IBKRClient:
@@ -495,6 +496,8 @@ class IBKRTrader:
                 orders=[described(order) for order in orders],
             )
             trades = [self._ib.placeOrder(contract, order) for order in orders]
+            for trade in trades:
+                trade.order.transmit = True
         await self._await_answers(trades, name)
         self._raise_if_rejected(trades, name)
         return PlacedChain(
@@ -638,6 +641,14 @@ class IBKRTrader:
                 )
         if not order.parentId and new_limit is not None:
             check_value(count, new_limit, self._max_value)
+        if order.parentId and shares is not None:
+            parent = self._own_trade(order.parentId)
+            ceiling = _to_float((parent or trade).order.totalQuantity)
+            if count > ceiling:
+                raise OrderCheckError(
+                    f"order {order.orderId} is the {role_of(order)} of entry {order.parentId}: "
+                    f"it may cover at most {ceiling:g} shares, got {count}"
+                )
         changed = copy.copy(order)
         if price is not None:
             changed.lmtPrice = new_limit
@@ -652,6 +663,7 @@ class IBKRTrader:
             asyncio.get_running_loop().create_future()
         )
         order_id = trade.order.orderId
+        before = trade.orderStatus.status
 
         def on_status(updated: Trade) -> None:
             if updated is trade and not answered.done():
@@ -663,6 +675,7 @@ class IBKRTrader:
 
         self._ib.orderStatusEvent += on_status
         self._ib.errorEvent += on_error
+        self._changing.add(order_id)
         try:
             self._ib.placeOrder(trade.contract, changed)
             outcome = await asyncio.wait_for(asyncio.shield(answered), self._config.timeout or None)
@@ -673,12 +686,15 @@ class IBKRTrader:
         finally:
             self._ib.orderStatusEvent -= on_status
             self._ib.errorEvent -= on_error
-        if outcome is not None:
-            return outcome
-        last = trade.log[-1] if trade.log else None
-        if last is not None and last.errorCode and not is_notice(last.errorCode):
-            return last.errorCode, last.message
-        return None
+            self._changing.discard(order_id)
+        if outcome is None:
+            last = trade.log[-1] if trade.log else None
+            if last is not None and last.errorCode and not is_notice(last.errorCode):
+                outcome = last.errorCode, last.message
+        guessed = trade.orderStatus.status in (OrderStatus.Cancelled, OrderStatus.ApiCancelled)
+        if outcome is not None and outcome[0] != CANCELLED_CODE and guessed:
+            trade.orderStatus.status = before
+        return outcome
 
     async def cancel(self, order_id: int) -> None:
         self._require_ready()
@@ -704,6 +720,13 @@ class IBKRTrader:
 
     async def cancel_chain(self, parent_id: int) -> list[int]:
         self._require_ready()
+        if parent_id <= 0:
+            refusal = OrderCheckError(
+                f"cancel_chain needs the order id of an entry, got {parent_id}: an entry or a "
+                "single limit order reports parent_id 0, so pass its order_id"
+            )
+            self._refused("cancel_chain", parent_id, refusal)
+            raise refusal
         chain = self._chain(parent_id)
         if not chain:
             refusal = OrderCheckError(
@@ -824,6 +847,8 @@ class IBKRTrader:
         if status == OrderStatus.Filled:
             return "filled"
         if status in (OrderStatus.Cancelled, OrderStatus.ApiCancelled):
+            if trade.order.orderId in self._changing and code not in (None, CANCELLED_CODE):
+                return "notice"
             never_accepted = trade.order.orderId not in self._accepted
             if code == REJECTED_CODE or (code not in (None, CANCELLED_CODE) and never_accepted):
                 return "rejected"
@@ -885,21 +910,22 @@ class IBKRTrader:
         avg: float | None = None,
     ) -> None:
         order_id = trade.order.orderId
-        if kind != "notice" and order_id in self._finished:
-            return
         done = trade.orderStatus.filled if filled is None else filled
-        if kind == "accepted":
-            if order_id in self._accepted:
-                return
-            self._accepted.add(order_id)
-        elif kind == "partial":
+        if kind in ("partial", "filled"):
             if done <= self._filled.get(order_id, 0.0):
+                return
+            self._filled[order_id] = done
+            self._accepted.add(order_id)
+            if kind == "filled":
+                self._finished.add(order_id)
+        elif kind == "accepted":
+            if order_id in self._accepted or order_id in self._finished:
                 return
             self._accepted.add(order_id)
         elif kind != "notice":
+            if order_id in self._finished:
+                return
             self._finished.add(order_id)
-        if kind in ("partial", "filled"):
-            self._filled[order_id] = max(done, self._filled.get(order_id, 0.0))
         event = self._event(kind, trade, code, reason, done, avg)
         for watch in list(self._watchers):
             self._client._deliver("order", event.ref or str(order_id), watch.callback, event)

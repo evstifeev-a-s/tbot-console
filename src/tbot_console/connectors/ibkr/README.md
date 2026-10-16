@@ -273,12 +273,17 @@ async with trader:                                  # refuses a live account wit
   each order. If IB rejects one, the call's unfilled entries are cancelled (their children go with
   them), orders guarding shares already filled stay, and `OrderRejectedError` carries IB's code
   and reason. An order IB has not confirmed in time comes back `PendingSubmit` with a warning;
-  its fate arrives through `watch_orders`.
+  its fate arrives through `watch_orders`. Once sent, every leg counts as transmitted, so
+  cancelling a leg IB has not confirmed yet waits for IB (`PendingCancel`) instead of ib_async's
+  local `Cancelled` for an untransmitted order.
 - `modify(order_id, *, price=None, stop=None, shares=None)` — e.g. the stop to breakeven after
   the first target; it waits for IB's answer and raises `ExchangeRequestError` with IB's code
-  when the change is refused. `cancel(order_id)`. `cancel_chain(parent_id)` cancels everything
+  when the change is refused. A target or stop never covers more shares than its entry.
+  `cancel(order_id)`. `cancel_chain(parent_id)` cancels everything
   of the chain (and of the other chains sent under the same `ref`) that still works: an unfilled
   entry takes its children down with it; after a fill only the remaining children go.
+  `parent_id` is the entry's order id; 0 (what an entry or a single limit reports as its own
+  `parent_id`) is refused rather than read as "every order without a parent".
   `reqGlobalCancel` is never exposed — it cancels every order of the account, other clients'
   and manual ones included.
 - `watch_orders(callback)` → `OrderWatch` (`stop_orders(watch)`): `OrderEvent(kind, order_id,
@@ -287,7 +292,8 @@ async with trader:                                  # refuses a live account wit
   `execDetailsEvent` and `errorEvent`. Kinds: `accepted`, `partial`, `filled`, `cancelled`,
   `rejected` (IB 201, `Inactive`, an error on an order never accepted), `notice` (warnings such as
   110, 399, 2109 — the order stays live). 202 reads as `cancelled` with IB's reason. `accepted`
-  and each terminal kind come once per order, `partial` once per new fill. Callbacks as
+  and each terminal kind come once per order, `partial` once per new fill; a fill is reported
+  even after a `cancelled` or `rejected`, because IB's executions are the fact. Callbacks as
   `watch_scan`'s.
 - `fetch_positions()` → `IBKRPosition(account, symbol, instrument, shares, avg_price)` of the
   traded account (`avg_price` per share or per unit of a derivative: IB's `avgCost` divided by the
@@ -417,7 +423,9 @@ reaches only the trading processes of a unit whose console switch is on
 - **ib_async marks a refused change as cancelled.** For an error (not a warning) on an existing
   order ib_async sets the trade's status to `Cancelled`, even when IB refused only the
   modification and the order still works with its old values. `modify` raises IB's code and says
-  so; `fetch_open_orders()` shows what IB really holds.
+  so, reports the refusal as a `notice` and puts the order's status back, so it stays working for
+  `cancel` and `modify` and its later fills arrive; `fetch_open_orders()` shows what IB really
+  holds.
 - **Children wait as `PreSubmitted`.** A bracket's target and stop are held at IB until their
   entry fills; they become `Submitted` then.
 - **One `Ticker` per contract.** ib_async keys tickers by `conId`, so a contract's quotes, depth
