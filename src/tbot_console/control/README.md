@@ -122,7 +122,8 @@ Guarantees an operation gives, whatever starts it (console button or CLI):
   `check: true` process) is never killed — the op fails with `stop_timeout` and the process shows
   `stuck`; every other process, the trading unit's `api` service included, is SIGKILLed after the
   timeout;
-- readiness after a spawn: `http` (the health path answers 200), `descriptor` (the bot's runtime
+- readiness after a spawn: `http` (the health path answers 200, asked directly past any proxy
+  setting), `descriptor` (the bot's runtime
   descriptor names the spawned pid) or `alive` (still running after 3 s); a child that dies while
   waiting fails the op with its last 20 output lines; a live child past `timeout_s` ends the op
   as done, and the unconfirmed readiness is only its final message;

@@ -30,6 +30,8 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_BUSY = 3
 
+DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 Echo = Callable[[str], None]
 Launch = tuple[dict[str, str], list[str], list[str]]
 
@@ -132,7 +134,7 @@ def tail_lines(path: Path, count: int) -> list[str]:
 
 def _http_ok(port: int, path: str) -> bool:
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=2) as response:
+        with DIRECT.open(f"http://127.0.0.1:{port}{path}", timeout=2) as response:
             return int(response.status) == 200
     except (urllib.error.URLError, OSError, ValueError):
         return False

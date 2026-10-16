@@ -36,7 +36,7 @@ _client: httpx.AsyncClient | None = None
 def shared_client() -> httpx.AsyncClient:
     global _client
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=TIMEOUT)
+        _client = httpx.AsyncClient(timeout=TIMEOUT, trust_env=False)
     return _client
 
 
