@@ -88,7 +88,14 @@ def file_env(base: Path, unit: UnitManifest, *files: Path) -> tuple[dict[str, st
     for path in files:
         if not path.is_file():
             continue
-        for key, value in dotenv_values(path).items():
+        try:
+            values = dotenv_values(path)
+        except (OSError, ValueError) as e:
+            raise EnvPolicyError(
+                f"{paths.relative(base, path)}: файл с ключами не читается ({e}). Сохраните его "
+                "в UTF-8 и проверьте права доступа: пока он не читается, процесс не запускается"
+            ) from e
+        for key, value in values.items():
             if value is None:
                 continue
             name = key.upper()
@@ -232,10 +239,25 @@ def is_alive(pid: int | None, started: float | None, mark: float | None = None) 
     return started is None or abs(created - started) <= CREATE_TIME_TOLERANCE
 
 
+def in_repo(path: Path | None, base: Path) -> bool:
+    if path is None:
+        return True
+    try:
+        root = base.stat()
+    except OSError:
+        return False
+    for folder in (path, *path.parents):
+        try:
+            found = folder.stat()
+        except OSError:
+            continue
+        if (found.st_dev, found.st_ino) == (root.st_dev, root.st_ino):
+            return True
+    return False
+
+
 def owned(base: Path, pid: int | None, started: float | None, mark: float | None = None) -> bool:
-    return (
-        pid is not None and is_alive(pid, started, mark) and cwd_of(pid) in (None, base.resolve())
-    )
+    return pid is not None and is_alive(pid, started, mark) and in_repo(cwd_of(pid), base)
 
 
 def terminate(pid: int) -> None:
@@ -346,7 +368,7 @@ def find_instances(base: Path, spec: ProcessSpec, exclude: set[int] | None = Non
             cwd = process.cwd()
         except UNREADABLE:
             continue
-        if not cwd or Path(cwd).resolve() != root:
+        if not cwd or not in_repo(Path(cwd).resolve(), root):
             continue
         if _env_compatible(process, spec.env):
             found.append(process.pid)

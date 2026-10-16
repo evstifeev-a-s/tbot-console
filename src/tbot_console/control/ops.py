@@ -31,6 +31,7 @@ EXIT_FAILED = 1
 EXIT_BUSY = 3
 
 Echo = Callable[[str], None]
+Launch = tuple[dict[str, str], list[str], list[str]]
 
 
 def new_op_id() -> str:
@@ -285,9 +286,24 @@ class Operation:
             },
         )
 
-    def _start(self) -> str:
+    def _launch(self) -> Launch:
+        env, dropped = procs.child_env(self.base, self.unit, self.proc)
+        return env, dropped, procs.build_argv(self.spec, procs.interpreter(self.base))
+
+    def _guard_free_lock(self, identity: dict[str, Any]) -> None:
+        lock = identity.get("lock")
+        if not lock:
+            return
+        holder = procs.lock_holder(paths.resolve(self.base, str(lock)), self.spec.module, self.base)
+        if holder is not None:
+            raise OpFailedError(self._foreign_message(holder), "lock_held")
+
+    def _start(self, checked: dict[str, Any] | None = None, launch: Launch | None = None) -> str:
         identity: dict[str, Any] = {}
-        if self.spec.check:
+        if checked is not None:
+            identity = checked
+            self._guard_free_lock(identity)
+        elif self.spec.check:
             identity = self._check(before="запуском").identity
             self._guard_lock(identity)
         found = instances(self.base, self.unit, self.proc)
@@ -300,14 +316,13 @@ class Operation:
                 f"порт {port} уже занят процессом {found[0]} ({command})", "port_busy"
             )
         self.phase("starting")
-        env, dropped = procs.child_env(self.base, self.unit, self.proc)
+        env, dropped, argv = launch or self._launch()
         if dropped:
             self.echo(
                 "из env-файлов не переданы (это настройки, а не секреты): " + ", ".join(dropped)
             )
         output = paths.resolve(self.base, self.unit.output_path(self.proc))
         procs.rotate_output(output)
-        argv = procs.build_argv(self.spec, procs.interpreter(self.base))
         self.echo(f"{self.label}: запускаю {shlex.join(argv)}")
         started_at = time.time()
         child = procs.spawn(argv, env, self.base, output)
@@ -406,15 +421,14 @@ class Operation:
 
     def _restart(self) -> str:
         current = self._current()
-        procs.env_file_policy(self.base, self.unit)
+        launch = self._launch()
+        checked: dict[str, Any] | None = None
         if self.spec.check:
-            self._guard_lock(
-                self._check(before="перезапуском").identity,
-                current.get("pid") if self._alive(current) else None,
-            )
+            checked = self._check(before="перезапуском").identity
+            self._guard_lock(checked, current.get("pid") if self._alive(current) else None)
         stopped = self._stop()
         self.echo(f"{self.label}: {stopped}")
-        return self._start()
+        return self._start(checked, launch)
 
     def _adopt(self, pid: int | None) -> str:
         current = self._current()
@@ -448,7 +462,7 @@ class Operation:
                 "mismatch",
             )
         cwd = procs.cwd_of(candidate)
-        if cwd is not None and cwd != self.base.resolve():
+        if not procs.in_repo(cwd, self.base):
             raise OpFailedError(f"процесс {candidate} работает из другой папки: {cwd}", "mismatch")
         named = self._descriptor_pid(identity)
         if named is not None and named != candidate:

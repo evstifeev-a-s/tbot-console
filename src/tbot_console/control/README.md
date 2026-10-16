@@ -102,6 +102,10 @@ Guarantees an operation gives, whatever starts it (console button or CLI):
   is the op log `run/ops/<op_id>.log` of the unit's repo;
 - identity is pid plus a start mark plus a cwd in the unit's repo (`procs.owned()`), so a
   reused pid is never signalled and a copied folder's `run/` state never signals the original;
+  the cwd counts when it is the repo or a folder inside it, compared as the same folder on disk
+  (`procs.in_repo()`: device and inode), so a process that changes into a subfolder, a repo path
+  typed in another letter case on a case-insensitive disk, or one reached through a symlink still
+  matches;
   the start mark (`procs.start_mark()`) is the kernel's start time that no clock change moves —
   seconds since boot on Linux, the raw start time on macOS — because psutil's `create_time()`
   follows clock steps (boot time on Linux, a shift since import on macOS) and the console would
@@ -109,8 +113,11 @@ Guarantees an operation gives, whatever starts it (console button or CLI):
   and is compared by `create_time`, which on macOS is the same raw value;
 - `check: true` processes run `<repo python> -m <module> --check` first (one JSON object: `ok`,
   `summary`, `checks`, `identity` with lock, descriptor and `lock_holder`); a failed check
-  refuses a start, and on restart it runs before the stop, so a bad config leaves a running bot
-  alone; a lock already held by another pid means "adopt it", never a second bot;
+  refuses a start, and on restart it runs once, before the stop, so a bad config leaves a running
+  bot alone; after the stop only the bot lock is looked at again (`procs.lock_holder`). Restart
+  also builds the child's environment and finds the interpreter before the stop, so an env file
+  that cannot be read leaves any process running; a lock already held by another pid means
+  "adopt it", never a second bot;
 - stop is SIGTERM and a wait of `stop_timeout_s`; a trading process (a `places_orders` unit's
   `check: true` process) is never killed — the op fails with `stop_timeout` and the process shows
   `stuck`; every other process, the trading unit's `api` service included, is SIGKILLed after the
@@ -134,12 +141,14 @@ Guarantees an operation gives, whatever starts it (console button or CLI):
   `IBKR_ALLOW_LIVE_TRADING`, `IBKR_WRITABLE` — the switches of the platform's own IBKR connector —
   and `TBOT_WEB_HOST`/`TBOT_WEB_ALLOWED_HOSTS`, so an env file cannot open the console to the
   network; `TBOT_WEB_TOKEN` is a credential and passes). A key is matched in upper case, so
-  `ibkr_allow_live_trading` is dropped too (Windows upper-cases environment names). A unit with `env_files_only` (`prefixes`,
-  `keys`) then keeps only the admitted keys of what is left; the rest is skipped silently, never
+  `ibkr_allow_live_trading` is dropped too (Windows upper-cases environment names). A unit with
+  `env_files_only` (`prefixes`, `keys`) then keeps only the admitted keys of what is left; the
+  rest is skipped silently, never
   listed as dropped, so the drop list is the same with or without the filter (the console admits
   only `TBOT_WEB_TOKEN`). `procs.file_env(base, unit, *files)` applies both steps and is shared by
   `child_env()` and `load_env_file(unit)`. The policy fails closed: a manifest file that is not a
-  JSON object or has a bad `env_files_ignore` raises `procs.EnvPolicyError` naming the file; until
+  JSON object or has a bad `env_files_ignore`, or an env file that cannot be read or is not
+  UTF-8, raises `procs.EnvPolicyError` naming the file; until
   it is fixed every start and restart, and the adopt of a `check` process, fails with that message
   before anything is stopped (a failed op: exit 1, `error_code: env_policy`), `tbot check` of a
   `check: true` process prints it and exits 2, and stop never reads the policy. A supervised
@@ -157,7 +166,7 @@ Guarantees an operation gives, whatever starts it (console button or CLI):
   bot's;
 - `adopt` never signals: it takes the lock holder (`check` processes), the port listener (api
   processes) or `--pid`, verifies that its command line runs `-m <module>` or one of the module's
-  console scripts in the unit repo's `.venv`, that its cwd is the unit's repo and that the bot
+  console scripts in the unit repo's `.venv`, that its cwd is in the unit's repo and that the bot
   descriptor names the same pid, then writes the state file with `adopted: true`, the file
   behind the process's stdout as its output and, as `live_trading`, what its environment says
   about `IBKR_ALLOW_LIVE_TRADING` (`null` when the OS does not show it).
@@ -189,7 +198,7 @@ lock `<unit>.<proc>.lock` and the op logs `ops/<op_id>.log`.
 | `manifest.py` | pydantic models of `config/units/<id>.json` (frozen, `extra="forbid"`): `UNIT_ID_PATTERN` and `RESERVED_IDS` (the console's own path segments: `api`, `js`, `css`, `vendor`, `static`, `processes`, …); process `env` keys are `TBOT_*` or wiring (`WIRING_KEY_RE`: `<PREFIX>_…_HOST`, `_ALLOWED_HOSTS`, `_CONFIG_PATH`, `_CONFIG_DIR`, `_DATA_DIR`; no ports — tbot passes `TBOT_PORT`) and never secret-looking (`SECRET_KEY_RE`: ends in `TOKEN`/`SECRET`/`PASSWORD`/`PASSWD`/`KEY`, `TBOT_*` included); `env_files` relative to the repo with no `..`; `EnvFilesIgnore` (`prefixes` like `XY_`, `keys`; never `TBOT_*`); `EnvFilesOnly` (`prefixes`, `keys`, at least one of them; `TBOT_*` allowed; `admits(key)`) for the optional `env_files_only`; `legacy_pages` (old top-level page names the console redirects to this unit; never its own id); a process `confirm` text (1–400 chars); in a `places_orders` unit every process except `api.process` has `check: true`, a trading process can never autostart, and every non-`TBOT_` `env` key has its first prefix in `env_files_ignore.prefixes`, so env files cannot supply the unit's other settings under that prefix; ports 1024–65535 except Postgres 5432/5433; the api process's `ready.port`, if set, equals `api.port`; `trades(proc)` (`places_orders` and `check`), `api_url()` (always `http://127.0.0.1:<api.port>`), `output_path()`, `ready_endpoint()`, `listen_port()` |
 | `registry.py` | `load_registry(home)` → `Registry(units, broken, bases)` with the claim rules above, memoized 3 s (`MEMO_TTL_S`, `forget()`); `Registry.get(id)`, `base(unit)`, `ui_base(ui)`; `console_manifest(port)` (the built-in unit with id `CONSOLE_ID` = `console`, process `web`, `ready.port` = `console_port`); `Workspace` + `workspace(home)`; `root_problem(base)` (python present, `tbot-console` installed in the root's `.venv`, same major via `importlib.metadata.distributions(name=…, path=site_dirs)`); `parse_manifest(path)` (one file → `UnitManifest` or `Broken`; the file name must equal the id); `load_root(base)` (one repo, clashing ports refuse every unit involved); `claim(home, roots, console)` (the cross-repo claim; also what `testing.manifest_problems` runs) |
 | `paths.py` | home (`TBOT_ROOT` or cwd), `units_dir`, `manifest_files()` (sorted `config/units/[!.]*.json`: hidden files such as `._x.json` / `.#x.json` are skipped), `workspace_file`, `live_trading_file`, `live_trading_log`, `ui_dir(base, ui)` = `<base>/js/units/<ui>`, `python(base)`, `site_dirs(base)`, `run/` state, op and lock files, op logs `run/ops/<op_id>.log` |
-| `procs.py` | `child_env(base, unit, proc)` (`file_env()`: `env_file_policy()` + `FILE_DROPPED_KEYS`, then `env_files_only`; `EnvPolicyError`; the live-trading flag from `live.enabled(home, unit)` for a trading process; `TBOT_PORT` from `unit.listen_port()`), `env_flag(pid, key)` (a variable of a running process, `None` when the OS hides it — psutil's `SystemError` on macOS included, like `find_instances()`), `supervised()`/`load_env_file(unit=None)`, `interpreter(base)` (the repo's python or `EnvPolicyError` «… выполните там `uv sync`»), `build_argv(spec, python)` (caffeinate), detached spawn, output rotation, pid identity (`start_mark(pid)`, `is_alive(pid, started, mark=None)`: the start mark when given, else `create_time`; a zombie counts as gone; `owned(base, pid, started, mark=None)`: alive and its cwd is `base` or unreadable), SIGTERM/SIGKILL, port and lock holders, `find_instances()` (a process the OS refuses to describe, including psutil's `SystemError` on macOS, is skipped rather than failing the scan), `console_scripts(module, base)` and `runs_module(argv, module, base=…)` (`-m <module>` or a console script from the repo's `.venv` whose entry point lives in `<module>` or `<module>.__main__`) |
+| `procs.py` | `child_env(base, unit, proc)` (`file_env()`: `env_file_policy()` + `FILE_DROPPED_KEYS`, then `env_files_only`; `EnvPolicyError`; the live-trading flag from `live.enabled(home, unit)` for a trading process; `TBOT_PORT` from `unit.listen_port()`), `env_flag(pid, key)` (a variable of a running process, `None` when the OS hides it — psutil's `SystemError` on macOS included, like `find_instances()`), `supervised()`/`load_env_file(unit=None)`, `interpreter(base)` (the repo's python or `EnvPolicyError` «… выполните там `uv sync`»), `build_argv(spec, python)` (caffeinate), detached spawn, output rotation, pid identity (`start_mark(pid)`, `is_alive(pid, started, mark=None)`: the start mark when given, else `create_time`; a zombie counts as gone; `owned(base, pid, started, mark=None)`: alive and its cwd is in `base` per `in_repo()` or unreadable), SIGTERM/SIGKILL, port and lock holders, `find_instances()` (a process the OS refuses to describe, including psutil's `SystemError` on macOS, is skipped rather than failing the scan), `console_scripts(module, base)` and `runs_module(argv, module, base=…)` (`-m <module>` or a console script from the repo's `.venv` whose entry point lives in `<module>` or `<module>.__main__`) |
 | `live.py` | the live-trading switch: `LIVE_TRADING_ENV`, `entries(home)`, `describe(entry)`, `state(home, unit)`, `enabled(home, unit)`, `change(home, unit, on, via)` (locked, atomic, with the audit line), `RESTART_HINT`, `VIA_NAMES` |
 | `state.py` | transition `flock`, `process_view` (state, `label`, `can`, confirm text, problem, `live_trading` via `live_trading_view()`), `STATE_NAMES` in Russian, `instances()` (the foreign-process search: the port holder, or `procs.find_instances()` for a process without a port), `output_file()`; state and op files are read and written with `files.py` |
 | `ops.py` | the executor: `Operation(base, unit, proc, action, op_id).execute()` for start / stop / restart / adopt with phases `checking → stopping → starting → waiting_ready → done`/`failed`; `run_check()` (builds the `--check` argv with the repo's python); `tail_lines()` |
