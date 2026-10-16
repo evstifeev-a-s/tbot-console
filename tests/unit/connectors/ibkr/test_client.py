@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
+from typing import Any
 
 import pytest
-from ib_async import ContractDetails
+from ib_async import IB, ContractDetails
 from ib_async.objects import OptionChain, OptionComputation
 from ib_async.wrapper import RequestError
 
@@ -21,6 +24,7 @@ from tbot_console.connectors.ibkr.client import (
 )
 from tbot_console.connectors.ibkr.config import IBKRConfig, MarketDataType
 from tbot_console.connectors.ibkr.instruments import IBKRInstrument, SecType
+from tbot_console.connectors.ibkr.scanner import ScanRequest
 from tbot_console.core.exceptions import ExchangeConnectionError, ExchangeRequestError
 
 from .conftest import FakeIB, make_bar, make_contract, make_details, make_ticker
@@ -643,3 +647,76 @@ class TestContractBuilding:
         contract = build_contract(IBKRInstrument.parse("ES-USD-CONTFUT@CME"))
         assert contract.secType == SecType.CONTFUT.value
         assert contract.lastTradeDateOrContractMonth == ""
+
+
+DISCONNECTED_CALLS: list[Callable[[IBKRClient], Awaitable[Any]]] = [
+    lambda c: c.qualify(AAPL),
+    lambda c: c.fetch_quotes([AAPL]),
+    lambda c: c.fetch_bars(AAPL, Timeframe.M1),
+    lambda c: c.fetch_executions(),
+    lambda c: c.fetch_open_orders(),
+    lambda c: c.fetch_positions(),
+    lambda c: c.fetch_option_chain(AAPL),
+    lambda c: c.scan_vocabulary(),
+    lambda c: c.depth_exchanges(),
+    lambda c: c.watch_scan(ScanRequest("TOP_PERC_GAIN"), print),
+]
+
+
+@pytest.mark.parametrize("call", DISCONNECTED_CALLS)
+async def test_a_dropped_gateway_raises_the_documented_error(call):
+    client = IBKRClient(IBKRConfig(timeout=0.5), ib=IB())
+    with pytest.raises(ExchangeConnectionError, match="Not connected"):
+        await call(client)
+
+
+async def answer_in_turn(
+    pending: dict[str, asyncio.Future[Any]], *tasks: asyncio.Task[Any]
+) -> None:
+    while not all(task.done() for task in tasks):
+        future = pending.pop("key", None)
+        if future is not None and not future.done():
+            future.set_result([])
+        await asyncio.sleep(0)
+
+
+@pytest.mark.parametrize(
+    ("request_name", "read"),
+    [
+        ("reqAllOpenOrdersAsync", lambda c: c.fetch_open_orders()),
+        ("reqPositionsAsync", lambda c: c.fetch_positions()),
+        ("reqMktDepthExchangesAsync", lambda c: c.depth_exchanges()),
+    ],
+)
+async def test_overlapping_reads_of_one_gateway_key_all_get_an_answer(
+    ib: FakeIB, monkeypatch: pytest.MonkeyPatch, request_name: str, read: Any
+):
+    pending: dict[str, asyncio.Future[Any]] = {}
+
+    def keyed() -> asyncio.Future[Any]:
+        pending["key"] = asyncio.get_running_loop().create_future()
+        return pending["key"]
+
+    monkeypatch.setattr(ib, request_name, keyed)
+    client = IBKRClient(IBKRConfig(timeout=0.5), ib=ib)
+    first = asyncio.create_task(read(client))
+    second = asyncio.create_task(read(client))
+    await asyncio.wait_for(answer_in_turn(pending, first, second), 2)
+    assert first.result() == [] and second.result() == []
+
+
+async def test_concurrent_first_scans_load_the_vocabulary_once(
+    ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[int] = []
+
+    async def slow_parameters() -> str:
+        calls.append(1)
+        await asyncio.sleep(0.01)
+        return "<ScanParameterResponse/>"
+
+    monkeypatch.setattr(ib, "reqScannerParametersAsync", slow_parameters)
+    client = IBKRClient(IBKRConfig(), ib=ib)
+    first, second = await asyncio.gather(client.scan_vocabulary(), client.scan_vocabulary())
+    assert first is second
+    assert calls == [1]

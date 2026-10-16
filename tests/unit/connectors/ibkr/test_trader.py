@@ -42,6 +42,7 @@ from tbot_console.core.exceptions import (
 )
 
 from .conftest import FakeIB, make_contract, make_details
+from .test_client import answer_in_turn
 
 DEMO = IBKRInstrument.parse("DEMO-USD-STK")
 CHEAP = IBKRInstrument.parse("CHEAP-USD-STK")
@@ -775,6 +776,46 @@ class TestEdges:
         other = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="dead")
         ib.set_status(by_id(ib, other.order_id), "Inactive")
         assert (events[-1].kind, events[-1].order_id) == ("rejected", other.order_id)
+
+    async def test_an_order_ib_refuses_with_321_is_rejected(
+        self, trader: IBKRTrader, ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+    ):
+        events: list[OrderEvent] = []
+        trader.watch_orders(events.append)
+        ib.answer_orders = False
+        place = ib.placeOrder
+        message = "Error validating request: The API interface is currently in Read-Only mode."
+
+        def read_only(contract: Contract, order: Order) -> Trade:
+            trade = place(contract, order)
+            loop = asyncio.get_running_loop()
+            loop.call_soon(lambda: ib.fail(trade, 321, message, warning=True))
+            return trade
+
+        monkeypatch.setattr(ib, "placeOrder", read_only)
+        with pytest.raises(OrderRejectedError, match="Read-Only mode") as refused:
+            await trader.place_limit(DEMO, "buy", 10, 2.5, ref="ro")
+        assert refused.value.code == 321
+        assert [(e.kind, e.code) for e in events] == [("rejected", 321)]
+        monkeypatch.setattr(ib, "placeOrder", place)
+        ib.answer_orders = True
+        assert (await trader.place_limit(DEMO, "buy", 10, 2.5, ref="ro")).status == "Submitted"
+
+    async def test_a_placement_and_an_open_order_read_do_not_collide(
+        self, trader: IBKRTrader, ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+    ):
+        pending: dict[str, asyncio.Future[Any]] = {}
+
+        def keyed() -> asyncio.Future[Any]:
+            pending["key"] = asyncio.get_running_loop().create_future()
+            return pending["key"]
+
+        monkeypatch.setattr(ib, "reqAllOpenOrdersAsync", keyed)
+        read = asyncio.create_task(trader.client.fetch_open_orders())
+        placing = asyncio.create_task(trader.place_limit(DEMO, "buy", 10, 2.5, ref="both"))
+        await asyncio.wait_for(answer_in_turn(pending, read, placing), 2)
+        assert read.result() == []
+        assert placing.result().status == "Submitted"
 
     async def test_a_change_ib_refuses_only_on_the_error_channel(
         self, trader: IBKRTrader, ib: FakeIB, monkeypatch: pytest.MonkeyPatch

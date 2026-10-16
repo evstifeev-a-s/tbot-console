@@ -43,6 +43,7 @@ from tbot_console.connectors.ibkr.orders import (
     FAILED,
     LIVE_ORDER,
     REJECTED_CODE,
+    VALIDATION_ERROR_CODE,
     AccountKind,
     BracketPlan,
     LiveAccountError,
@@ -297,14 +298,14 @@ class IBKRTrader:
         return trade
 
     async def _refuse_reused(self, ref: str, account: str) -> None:
-        asked = asyncio.wait_for(self._ib.reqAllOpenOrdersAsync(), self._config.timeout or None)
-        remote = await self._client._request(asked, "open orders")
+        remote = await self._client._open_trades()
         working = {
             t.order.orderId
             for t in [*self._ib.openTrades(), *remote]
             if t.order.orderRef == ref
             and t.orderStatus.status not in OrderStatus.DoneStates
             and t.order.account in ("", account)
+            and not self._never_placed(t)
         }
         if working:
             raise OrderCheckError(
@@ -367,11 +368,18 @@ class IBKRTrader:
         finally:
             self._ib.orderStatusEvent -= check
 
+    def _never_placed(self, trade: Trade) -> bool:
+        return (
+            trade.orderStatus.status == OrderStatus.ValidationError
+            and trade.order.orderId not in self._accepted
+            and any(entry.errorCode == VALIDATION_ERROR_CODE for entry in trade.log)
+        )
+
     def _withdraw(self, trades: Sequence[Trade], ref: str) -> list[int]:
         withdrawn = []
         for trade in trades:
             unfilled_entry = not trade.order.parentId and trade.orderStatus.filled == 0
-            if unfilled_entry and not trade.isDone():
+            if unfilled_entry and not trade.isDone() and not self._never_placed(trade):
                 self._ib.cancelOrder(trade.order)
                 withdrawn.append(trade.order.orderId)
         if withdrawn:
@@ -379,7 +387,7 @@ class IBKRTrader:
         return withdrawn
 
     def _raise_if_rejected(self, trades: Sequence[Trade], ref: str) -> None:
-        failed = [t for t in trades if t.orderStatus.status in FAILED]
+        failed = [t for t in trades if t.orderStatus.status in FAILED or self._never_placed(t)]
         if not failed:
             return
         first = failed[0]
@@ -572,6 +580,7 @@ class IBKRTrader:
         except OrderCheckError as refusal:
             self._refused("modify", order_id, refusal)
             raise
+        self._require_ready()
         self._journal.write(
             "request",
             action="modify",
@@ -796,10 +805,11 @@ class IBKRTrader:
         key = instrument.to_normalized()
         self._journal.write("what_if", account=self.account, symbol=key, orders=[described(order)])
         with self._client._errors() as errors:
-            asked = asyncio.wait_for(
-                self._ib.whatIfOrderAsync(contract, order), self._config.timeout or None
+            state = await self._client._request(
+                lambda: self._ib.whatIfOrderAsync(contract, order),
+                f"what-if of {key}",
+                limit=self._config.timeout,
             )
-            state = await self._client._request(asked, f"what-if of {key}")
         if not isinstance(state, OrderState):
             failure = errors.by_contract.get(contract.conId)
             if failure is not None:
@@ -856,7 +866,7 @@ class IBKRTrader:
         if status == OrderStatus.Inactive:
             return "rejected"
         if status == OrderStatus.ValidationError:
-            return "notice"
+            return "rejected" if self._never_placed(trade) else "notice"
         if status in LIVE_ORDER:
             return "partial" if trade.orderStatus.filled > 0 else "accepted"
         return None

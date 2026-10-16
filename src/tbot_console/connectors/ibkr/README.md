@@ -69,7 +69,9 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
   live-trading guard.
 - Every venue failure surfaces as `tbot_console.core.exceptions.ExchangeRequestError` (carrying
   IB's numeric error code) or `ExchangeConnectionError` — never a raw `ib_async` exception and
-  never a silent empty answer. `fetch_bars` and `scan` raise for an error IB reports on their own
+  never a silent empty answer. That includes a call made while the gateway is down: ib_async's
+  request methods send at once and raise its `ConnectionError("Not connected")`, so every request
+  is started inside the client's own error mapping (`IBKRClient._request`). `fetch_bars` and `scan` raise for an error IB reports on their own
   request; `fetch_bars` returns `[]` only for IB's "HMDS query returned no data" (code 162) and
   raises `ExchangeConnectionError` for a history IB never answered within the timeout;
   `fetch_quotes` leaves out (and logs with its code) an instrument whose snapshot IB refused, so
@@ -290,7 +292,8 @@ async with trader:                                  # refuses a live account wit
   perm_id, parent_id, ref, role, symbol, side, shares, filled, remaining, avg_price, status,
   code, reason, time)` for the orders of this connection's client id, from `orderStatusEvent`,
   `execDetailsEvent` and `errorEvent`. Kinds: `accepted`, `partial`, `filled`, `cancelled`,
-  `rejected` (IB 201, `Inactive`, an error on an order never accepted), `notice` (warnings such as
+  `rejected` (IB 201, `Inactive`, an error on an order never accepted, and 321 on a new order —
+  e.g. TWS's Read-Only API — which ib_async marks `ValidationError`), `notice` (warnings such as
   110, 399, 2109 — the order stays live). 202 reads as `cancelled` with IB's reason. `accepted`
   and each terminal kind come once per order, `partial` once per new fill; a fill is reported
   even after a `cancelled` or `rejected`, because IB's executions are the fact. Callbacks as
@@ -438,7 +441,14 @@ reaches only the trading processes of a unit whose console switch is on
   id and by contract) instead of flipping that switch, because the switch is global to the `IB`
   object and would make one refused contract fail a whole multi-contract snapshot. ib_async also
   counts 321 (request validation) as a warning and keeps waiting for the answer; the client
-  still reports it once the request ends.
+  still reports it once the request ends. On a new order 321 means IB never took it (status
+  `ValidationError`): the trader raises `OrderRejectedError` for it, emits `rejected` and frees its
+  `ref`.
+- **ib_async keeps one pending answer per request name.** Open orders, positions, scanner
+  parameters and depth exchanges are keyed by name, not by request id, so a second overlapping
+  request would orphan the first caller's answer. The client runs each of them under its own lock
+  (the trader's `ref` check shares the open-orders one), and `scan_vocabulary` downloads the
+  catalogue once for concurrent first callers.
 - **One client id per connection.** A second client reusing `IBKR_CLIENT_ID` is refused by the
   gateway; give parallel processes distinct ids.
 - **Ambiguous contracts.** `reqContractDetails` can return several matches (same ticker on

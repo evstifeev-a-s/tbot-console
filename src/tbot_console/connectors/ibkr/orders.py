@@ -23,6 +23,7 @@ SUB_CENT = 0.0001
 TICK_TOLERANCE = 1e-6
 REJECTED_CODE = 201
 CANCELLED_CODE = 202
+VALIDATION_ERROR_CODE = 321
 ANSWERED = frozenset(
     {
         OrderStatus.PreSubmitted,

@@ -434,6 +434,7 @@ class IBKRClient:
         self._stream_by_request: dict[int, StreamWatch] = {}
         self._streams_hooked = False
         self._callback_tasks: set[asyncio.Task[Any]] = set()
+        self._keyed: dict[str, asyncio.Lock] = {}
 
     @property
     def config(self) -> IBKRConfig:
@@ -503,15 +504,36 @@ class IBKRClient:
         finally:
             self._ib.errorEvent -= errors
 
-    async def _request(self, awaitable: Awaitable[T], what: str) -> T:
+    async def _request(
+        self, start: Callable[[], Awaitable[T]], what: str, *, limit: float | None = None
+    ) -> T:
         try:
-            return await awaitable
+            asked = start()
+            return await (asked if limit is None else asyncio.wait_for(asked, limit or None))
         except RequestError as exc:
             raise ExchangeRequestError(
                 f"IBKR rejected {what}: {exc.message}", code=exc.code, reason=exc.message
             ) from exc
         except (TimeoutError, OSError) as exc:
             raise ExchangeConnectionError(f"IBKR request failed for {what}: {exc!r}") from exc
+
+    def _call(self, start: Callable[[], T], what: str) -> T:
+        try:
+            return start()
+        except OSError as exc:
+            raise ExchangeConnectionError(f"IBKR request failed for {what}: {exc!r}") from exc
+
+    def _keyed_lock(self, key: str) -> asyncio.Lock:
+        lock = self._keyed.get(key)
+        if lock is None:
+            lock = self._keyed[key] = asyncio.Lock()
+        return lock
+
+    async def _open_trades(self) -> list[Trade]:
+        async with self._keyed_lock("openOrders"):
+            return await self._request(
+                self._ib.reqAllOpenOrdersAsync, "open orders", limit=self._config.timeout
+            )
 
     async def qualify(self, instrument: IBKRInstrument) -> ContractSpec:
         cached = self._specs.get(instrument)
@@ -520,7 +542,8 @@ class IBKRClient:
 
         routed = instrument.to_routed()
         details = await self._request(
-            self._ib.reqContractDetailsAsync(build_contract(instrument)), f"contract {routed}"
+            lambda: self._ib.reqContractDetailsAsync(build_contract(instrument)),
+            f"contract {routed}",
         )
         if not details:
             raise ExchangeRequestError(
@@ -578,7 +601,7 @@ class IBKRClient:
 
         with self._errors() as errors:
             tickers = await self._request(
-                self._ib.reqTickersAsync(*[contract for _, contract in pairs]), "tickers"
+                lambda: self._ib.reqTickersAsync(*[contract for _, contract in pairs]), "tickers"
             )
         by_con_id = {t.contract.conId: t for t in tickers if t.contract is not None}
 
@@ -615,7 +638,7 @@ class IBKRClient:
         started = loop.time()
         with self._errors() as errors:
             bars = await self._request(
-                self._ib.reqHistoricalDataAsync(
+                lambda: self._ib.reqHistoricalDataAsync(
                     contract,
                     endDateTime="",
                     durationStr=duration,
@@ -657,7 +680,7 @@ class IBKRClient:
         self, symbol: str = "", since: datetime | None = None
     ) -> list[IBKRExecution]:
         flt = ExecutionFilter(acctCode=self._config.account or "", symbol=symbol.upper())
-        fills = await self._request(self._ib.reqExecutionsAsync(flt), "executions")
+        fills = await self._request(lambda: self._ib.reqExecutionsAsync(flt), "executions")
         out = [e for e in map(execution_from_fill, fills) if e is not None]
         if since is not None:
             start = bar_timestamp(since)
@@ -665,8 +688,7 @@ class IBKRClient:
         return sorted(out, key=lambda e: (e.timestamp, e.exec_id))
 
     async def fetch_open_orders(self, symbol: str = "") -> list[IBKROrder]:
-        asked = asyncio.wait_for(self._ib.reqAllOpenOrdersAsync(), self._config.timeout or None)
-        trades = await self._request(asked, "open orders")
+        trades = await self._open_trades()
         wanted, account = symbol.upper(), self._config.account or ""
         out = [
             o
@@ -678,8 +700,10 @@ class IBKRClient:
         return sorted(out, key=lambda o: (o.placed_at or 0.0, o.order_id))
 
     async def fetch_positions(self) -> list[IBKRPosition]:
-        asked = asyncio.wait_for(self._ib.reqPositionsAsync(), self._config.timeout or None)
-        rows = await self._request(asked, "positions")
+        async with self._keyed_lock("positions"):
+            rows = await self._request(
+                self._ib.reqPositionsAsync, "positions", limit=self._config.timeout
+            )
         account = self._config.account or ""
         out = [
             position_from(row)
@@ -696,7 +720,7 @@ class IBKRClient:
             else ""
         )
         chains = await self._request(
-            self._ib.reqSecDefOptParamsAsync(
+            lambda: self._ib.reqSecDefOptParamsAsync(
                 underlying.symbol,
                 fut_fop_exchange,
                 underlying.sec_type.value,
@@ -719,8 +743,15 @@ class IBKRClient:
     async def scan_vocabulary(self, *, refresh: bool = False) -> ScannerVocabulary:
         if self._vocabulary is not None and not refresh:
             return self._vocabulary
-        xml = await self._request(self._ib.reqScannerParametersAsync(), "scanner parameters")
-        self._vocabulary = parse_scanner_parameters(xml)
+        async with self._keyed_lock("scannerParams"):
+            if self._vocabulary is not None and not refresh:
+                return self._vocabulary
+            xml = await self._request(
+                self._ib.reqScannerParametersAsync,
+                "scanner parameters",
+                limit=self._config.timeout * HISTORY_TIMEOUT_FACTOR,
+            )
+            self._vocabulary = parse_scanner_parameters(xml)
         return self._vocabulary
 
     async def scan(self, request: ScanRequest, *, validate: bool = False) -> list[ScanHit]:
@@ -734,7 +765,7 @@ class IBKRClient:
 
         with self._errors() as errors:
             rows = await self._request(
-                self._ib.reqScannerDataAsync(
+                lambda: self._ib.reqScannerDataAsync(
                     build_subscription(request), [], filter_options(request)
                 ),
                 f"scan {request.scan_code}",
@@ -756,8 +787,11 @@ class IBKRClient:
                 len(self._watches),
             )
 
-        rows = self._ib.reqScannerSubscription(
-            build_subscription(request), [], filter_options(request)
+        rows = self._call(
+            lambda: self._ib.reqScannerSubscription(
+                build_subscription(request), [], filter_options(request)
+            ),
+            f"scan {request.scan_code}",
         )
 
         def on_update(data: ScanDataList) -> None:
@@ -938,7 +972,7 @@ class IBKRClient:
         contract = await self._qualified_contract(instrument)
         self._reserve_stream(what, contract, DEPTH_TICK_TYPE)
         self._hook_streams()
-        ticker = self._ib.reqMktDepth(contract, rows, smart)
+        ticker = self._call(lambda: self._ib.reqMktDepth(contract, rows, smart), what)
 
         def on_update(updated: Ticker) -> None:
             self._on_depth(watch, updated)
@@ -981,8 +1015,12 @@ class IBKRClient:
         self._deliver(watch.label, watch.instrument.to_routed(), watch.callback, book)
 
     async def depth_exchanges(self) -> list[DepthExchange]:
-        asked = asyncio.wait_for(self._ib.reqMktDepthExchangesAsync(), self._config.timeout or None)
-        rows = await self._request(asked, "depth exchanges")
+        async with self._keyed_lock("mktDepthExchanges"):
+            rows = await self._request(
+                self._ib.reqMktDepthExchangesAsync,
+                "depth exchanges",
+                limit=self._config.timeout,
+            )
         return sorted(map(exchange_from, rows), key=lambda row: (row.sec_type, row.exchange))
 
     async def watch_tape(
@@ -1001,7 +1039,7 @@ class IBKRClient:
         family = TAPE_TICK_TYPES[kind]
         self._reserve_stream(what, contract, family)
         self._hook_streams()
-        ticker = self._ib.reqTickByTickData(contract, family, 0, False)
+        ticker = self._call(lambda: self._ib.reqTickByTickData(contract, family, 0, False), what)
 
         def on_update(updated: Ticker) -> None:
             self._on_tape(watch, updated)
@@ -1124,11 +1162,11 @@ class IBKRClient:
         timeout = self._config.timeout * HISTORY_TIMEOUT_FACTOR
         with self._errors() as errors:
             ticks = await self._request(
-                asyncio.wait_for(
-                    self._ib.reqHistoricalTicksAsync(contract, cursor, "", count, show, rth_only),
-                    timeout or None,
+                lambda: self._ib.reqHistoricalTicksAsync(
+                    contract, cursor, "", count, show, rth_only
                 ),
                 what,
+                limit=timeout,
             )
         failure = errors.by_contract.get(contract.conId)
         if not ticks and failure is not None and not is_no_data(*failure):
