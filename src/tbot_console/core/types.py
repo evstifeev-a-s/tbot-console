@@ -4,8 +4,10 @@ This module defines core types used across all exchanges and components.
 """
 
 from enum import Enum
+from warnings import deprecated
 
 
+@deprecated("ConnectionType is not used by the platform and goes away in tbot-console 2.0.0")
 class ConnectionType(str, Enum):
     """Types of connections in a pool.
 
@@ -30,6 +32,7 @@ class ServerType(str, Enum):
     PRODUCTION = "production"
 
 
+@deprecated("CallbackType is not used by the platform and goes away in tbot-console 2.0.0")
 class CallbackType(str, Enum):
     """Types of data callbacks.
 

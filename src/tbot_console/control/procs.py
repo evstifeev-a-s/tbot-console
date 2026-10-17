@@ -32,9 +32,8 @@ BASE_ENV = (
     "TMPDIR",
     "TZ",
 )
-FILE_DROPPED_KEYS = frozenset(
-    {live.LIVE_TRADING_ENV, "IBKR_WRITABLE", "TBOT_WEB_HOST", "TBOT_WEB_ALLOWED_HOSTS"}
-)
+TRADING_SWITCH_KEYS = frozenset({live.LIVE_TRADING_ENV, "IBKR_WRITABLE"})
+FILE_DROPPED_KEYS = TRADING_SWITCH_KEYS | {"TBOT_WEB_HOST", "TBOT_WEB_ALLOWED_HOSTS"}
 SUPERVISED_ENV = "TBOT_UNIT"
 UNREADABLE_MANIFEST = "файл не читается или в нём не JSON-объект"
 PORT_ENV = "TBOT_PORT"
@@ -89,10 +88,18 @@ def file_env(base: Path, unit: UnitManifest, *files: Path) -> tuple[dict[str, st
     for path in files:
         if not path.is_file():
             continue
-        for key, value in dotenv_values(path).items():
+        try:
+            values = dotenv_values(path)
+        except (OSError, ValueError) as e:
+            raise EnvPolicyError(
+                f"{paths.relative(base, path)}: файл с ключами не читается ({e}). Сохраните его "
+                "в UTF-8 и проверьте права доступа: пока он не читается, процесс не запускается"
+            ) from e
+        for key, value in values.items():
             if value is None:
                 continue
-            if key.startswith(prefixes) or key in keys:
+            name = key.upper()
+            if name.startswith(prefixes) or name in keys:
                 dropped.add(key)
             elif only is None or only.admits(key):
                 env[key] = value
@@ -134,9 +141,9 @@ def load_env_file(unit: str | None = None) -> None:
         return
     base = paths.root()
     if unit is None:
-        from dotenv import load_dotenv
-
-        load_dotenv(base / ".env", override=False)
+        for key, value in dotenv_values(base / ".env").items():
+            if value is not None and key.upper() not in TRADING_SWITCH_KEYS:
+                os.environ.setdefault(key, value)
         return
     try:
         values, _ = file_env(base, _hand_start_unit(base, unit), base / ".env")
@@ -232,10 +239,25 @@ def is_alive(pid: int | None, started: float | None, mark: float | None = None) 
     return started is None or abs(created - started) <= CREATE_TIME_TOLERANCE
 
 
+def in_repo(path: Path | None, base: Path) -> bool:
+    if path is None:
+        return True
+    try:
+        root = base.stat()
+    except OSError:
+        return False
+    for folder in (path, *path.parents):
+        try:
+            found = folder.stat()
+        except OSError:
+            continue
+        if (found.st_dev, found.st_ino) == (root.st_dev, root.st_ino):
+            return True
+    return False
+
+
 def owned(base: Path, pid: int | None, started: float | None, mark: float | None = None) -> bool:
-    return (
-        pid is not None and is_alive(pid, started, mark) and cwd_of(pid) in (None, base.resolve())
-    )
+    return pid is not None and is_alive(pid, started, mark) and in_repo(cwd_of(pid), base)
 
 
 def terminate(pid: int) -> None:
@@ -346,7 +368,7 @@ def find_instances(base: Path, spec: ProcessSpec, exclude: set[int] | None = Non
             cwd = process.cwd()
         except UNREADABLE:
             continue
-        if not cwd or Path(cwd).resolve() != root:
+        if not cwd or not in_repo(Path(cwd).resolve(), root):
             continue
         if _env_compatible(process, spec.env):
             found.append(process.pid)

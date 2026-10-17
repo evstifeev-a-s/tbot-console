@@ -89,6 +89,8 @@ def _read(path: Path, where: str) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except OSError as e:
         return Broken(where, f"файл не читается: {e}")
+    except UnicodeDecodeError:
+        return Broken(where, "файл не в кодировке UTF-8 — сохраните его в UTF-8")
     except json.JSONDecodeError as e:
         return Broken(where, f"не JSON: строка {e.lineno}, {e.msg}")
 

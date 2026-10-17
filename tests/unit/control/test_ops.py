@@ -64,6 +64,9 @@ else:
 
 Path("state").mkdir(exist_ok=True)
 lock.write_text(str(os.getpid()))
+if mode == "chdir":
+    Path("data").mkdir(exist_ok=True)
+    os.chdir("data")
 if mode == "descriptor":
     descriptor.write_text(json.dumps({"pid": os.getpid()}))
 if mode == "serve":
@@ -268,6 +271,16 @@ class TestLifecycle:
         assert "кодом 3" in current["problem"]
         assert "boom" in current["problem"]
 
+    def test_a_process_that_moves_into_a_subfolder_stays_under_control(self, fake_root):
+        write_manifest(fake_root, unit(mode="chdir"))
+        assert run(fake_root, "start")[0] == ops.EXIT_OK
+        running = view(fake_root)
+        assert running["state"] == "running"
+        assert procs.cwd_of(running["pid"]) == (fake_root / "data").resolve()
+        code, lines = run(fake_root, "stop")
+        assert code == ops.EXIT_OK, lines
+        assert not procs.is_alive(running["pid"], None)
+
     def test_restart_replaces_the_process(self, fake_root):
         write_manifest(fake_root, unit())
         run(fake_root, "start")
@@ -297,6 +310,41 @@ class TestSafety:
         assert code == ops.EXIT_FAILED
         assert "бюджет $1500" in lines[-1]
         assert not (fake_root / "logs/units/demo.main.out").exists()
+
+    def test_restart_checks_once_before_the_stop(self, fake_root, monkeypatch):
+        write_manifest(fake_root, unit(check=True, places_orders=True))
+        assert run(fake_root, "start")[0] == ops.EXIT_OK
+        first = view(fake_root)["pid"]
+        checks: list[str] = []
+        real = ops.run_check
+
+        def once(base: Path, manifest: UnitManifest, proc: str) -> ops.CheckResult:
+            checks.append(proc)
+            if len(checks) > 1:
+                return ops.CheckResult(False, {}, "шлюз не ответил")
+            return real(base, manifest, proc)
+
+        monkeypatch.setattr(ops, "run_check", once)
+        code, lines = run(fake_root, "restart")
+        assert code == ops.EXIT_OK, lines
+        assert checks == ["main"]
+        restarted = view(fake_root)
+        assert restarted["state"] == "running" and restarted["pid"] != first
+
+    def test_an_unreadable_env_file_leaves_the_process_running_on_restart(self, fake_root):
+        manifest = unit()
+        manifest["processes"]["main"]["env_files"] = [".env"]
+        write_manifest(fake_root, manifest)
+        assert run(fake_root, "start")[0] == ops.EXIT_OK
+        pid = view(fake_root)["pid"]
+        (fake_root / ".env").write_bytes("# комментарий\nDEMO_HOST=x\n".encode("cp1251"))
+        code, lines = run(fake_root, "restart")
+        assert code == ops.EXIT_FAILED
+        assert ".env: файл с ключами не читается" in lines[-1]
+        assert view(fake_root)["pid"] == pid
+        assert procs.is_alive(pid, None)
+        op = read_object(paths.op_path(fake_root, "demo", "main"))
+        assert op is not None and op["error_code"] == "env_policy"
 
     def test_a_failed_check_leaves_the_running_bot_alone_on_restart(self, fake_root):
         write_manifest(fake_root, unit(check=True, places_orders=True))

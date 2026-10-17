@@ -42,6 +42,7 @@ from tbot_console.core.exceptions import (
 )
 
 from .conftest import FakeIB, make_contract, make_details
+from .test_client import answer_in_turn
 
 DEMO = IBKRInstrument.parse("DEMO-USD-STK")
 CHEAP = IBKRInstrument.parse("CHEAP-USD-STK")
@@ -507,6 +508,56 @@ class TestModifyAndCancel:
             await trader.modify(chain.legs[1].order_id, price=2.9)
         assert refused.value.code == 110
 
+    async def test_a_child_never_covers_more_than_its_entry(self, trader: IBKRTrader, ib: FakeIB):
+        chain = await two_target_chain(trader)
+        target_1, stop_1 = chain.legs[1].order_id, chain.legs[2].order_id
+        sent = len(ib.placed)
+        for order_id in (stop_1, target_1):
+            with pytest.raises(OrderCheckError, match="may cover at most 60 shares, got 50000"):
+                await trader.modify(order_id, shares=50_000)
+        assert len(ib.placed) == sent
+        assert (await trader.modify(stop_1, shares=50)).shares == 50
+
+    async def test_a_refused_change_leaves_the_order_working(self, trader: IBKRTrader, ib: FakeIB):
+        events: list[OrderEvent] = []
+        trader.watch_orders(events.append)
+        placed = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="r")
+        ib.modify_refusal = (201, "Order rejected - reason: the price is out of range")
+        with pytest.raises(ExchangeRequestError, match="did not apply the change") as refused:
+            await trader.modify(placed.order_id, price=2.4)
+        assert refused.value.code == 201
+        assert [(e.kind, e.code) for e in events] == [("accepted", None), ("notice", 201)]
+        assert not by_id(ib, placed.order_id).isDone()
+        ib.fill(placed.order_id, 10, 2.5)
+        assert [(e.kind, e.filled) for e in events[2:]] == [("filled", 10)]
+
+    async def test_a_refused_change_can_still_be_cancelled(self, trader: IBKRTrader, ib: FakeIB):
+        placed = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="r")
+        ib.modify_refusal = (201, "Order rejected - reason: the price is out of range")
+        with pytest.raises(ExchangeRequestError):
+            await trader.modify(placed.order_id, price=2.4)
+        await trader.cancel(placed.order_id)
+        assert ib.cancel_calls == [placed.order_id]
+
+    async def test_a_fill_is_reported_even_after_a_cancel(self, trader: IBKRTrader, ib: FakeIB):
+        events: list[OrderEvent] = []
+        trader.watch_orders(events.append)
+        placed = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="late-fill")
+        ib.set_status(by_id(ib, placed.order_id), "Cancelled")
+        ib.fill(placed.order_id, 10, 2.5)
+        assert [e.kind for e in events] == ["accepted", "cancelled", "filled"]
+
+    async def test_cancelling_an_unanswered_chain_waits_for_ib(self, ib: FakeIB, journal: Path):
+        quick = build(ib, journal, timeout=0.05)
+        await quick.connect()
+        events: list[OrderEvent] = []
+        quick.watch_orders(events.append)
+        ib.answer_orders = False
+        chain = await quick.place_bracket(DEMO, "buy", 10, 2.5, 2.3, ref="slow")
+        assert await quick.cancel_chain(chain.parent_id) == [chain.parent_id]
+        assert by_id(ib, chain.parent_id).orderStatus.status == "PendingCancel"
+        assert events == []
+
     async def test_cancel_takes_one_order(self, trader: IBKRTrader, ib: FakeIB):
         chain = await two_target_chain(trader)
         await trader.cancel(chain.legs[1].order_id)
@@ -534,6 +585,18 @@ class TestModifyAndCancel:
         assert await trader.cancel_chain(chain.parent_id) == []
         with pytest.raises(OrderCheckError, match="not an order of this client"):
             await trader.cancel_chain(424242)
+
+    async def test_cancel_chain_refuses_the_parent_id_of_an_entry(
+        self, trader: IBKRTrader, ib: FakeIB, journal: Path
+    ):
+        chain = await two_target_chain(trader)
+        ib.fill(chain.parent_id, 60, 2.5)
+        single = await trader.place_limit(DEMO, "buy", 10, 2.4, ref="single")
+        assert single.parent_id == 0
+        with pytest.raises(OrderCheckError, match="needs the order id of an entry, got 0"):
+            await trader.cancel_chain(single.parent_id)
+        assert ib.cancel_calls == []
+        assert events_of(journal, "refused")[-1]["action"] == "cancel_chain"
 
     def test_the_trader_never_cancels_everything(self):
         source = inspect.getsource(trader_module)
@@ -713,6 +776,46 @@ class TestEdges:
         other = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="dead")
         ib.set_status(by_id(ib, other.order_id), "Inactive")
         assert (events[-1].kind, events[-1].order_id) == ("rejected", other.order_id)
+
+    async def test_an_order_ib_refuses_with_321_is_rejected(
+        self, trader: IBKRTrader, ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+    ):
+        events: list[OrderEvent] = []
+        trader.watch_orders(events.append)
+        ib.answer_orders = False
+        place = ib.placeOrder
+        message = "Error validating request: The API interface is currently in Read-Only mode."
+
+        def read_only(contract: Contract, order: Order) -> Trade:
+            trade = place(contract, order)
+            loop = asyncio.get_running_loop()
+            loop.call_soon(lambda: ib.fail(trade, 321, message, warning=True))
+            return trade
+
+        monkeypatch.setattr(ib, "placeOrder", read_only)
+        with pytest.raises(OrderRejectedError, match="Read-Only mode") as refused:
+            await trader.place_limit(DEMO, "buy", 10, 2.5, ref="ro")
+        assert refused.value.code == 321
+        assert [(e.kind, e.code) for e in events] == [("rejected", 321)]
+        monkeypatch.setattr(ib, "placeOrder", place)
+        ib.answer_orders = True
+        assert (await trader.place_limit(DEMO, "buy", 10, 2.5, ref="ro")).status == "Submitted"
+
+    async def test_a_placement_and_an_open_order_read_do_not_collide(
+        self, trader: IBKRTrader, ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+    ):
+        pending: dict[str, asyncio.Future[Any]] = {}
+
+        def keyed() -> asyncio.Future[Any]:
+            pending["key"] = asyncio.get_running_loop().create_future()
+            return pending["key"]
+
+        monkeypatch.setattr(ib, "reqAllOpenOrdersAsync", keyed)
+        read = asyncio.create_task(trader.client.fetch_open_orders())
+        placing = asyncio.create_task(trader.place_limit(DEMO, "buy", 10, 2.5, ref="both"))
+        await asyncio.wait_for(answer_in_turn(pending, read, placing), 2)
+        assert read.result() == []
+        assert placing.result().status == "Submitted"
 
     async def test_a_change_ib_refuses_only_on_the_error_channel(
         self, trader: IBKRTrader, ib: FakeIB, monkeypatch: pytest.MonkeyPatch

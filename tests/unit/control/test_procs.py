@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import psutil
 import pytest
@@ -56,3 +57,29 @@ class TestClockStep:
         assert recorded is not None
         assert procs.is_alive(os.getpid(), recorded)
         assert not procs.is_alive(os.getpid(), recorded + 1.0)
+
+
+class TestRepoFolder:
+    def test_the_repo_and_its_subfolders_count_as_its_own(self, tmp_path: Path):
+        repo = tmp_path / "Repo"
+        (repo / "data" / "deep").mkdir(parents=True)
+        assert procs.in_repo(repo, repo)
+        assert procs.in_repo(repo / "data" / "deep", repo)
+        assert procs.in_repo(None, repo)
+
+    def test_a_folder_outside_the_repo_is_not_its_own(self, tmp_path: Path):
+        repo = tmp_path / "Repo"
+        copy = repo / "copy"
+        copy.mkdir(parents=True)
+        assert not procs.in_repo(tmp_path, repo)
+        assert not procs.in_repo(repo, copy)
+        assert not procs.in_repo(repo, tmp_path / "missing")
+
+    def test_a_folder_is_compared_by_identity_not_by_spelling(self, tmp_path: Path):
+        repo = tmp_path / "Repo"
+        repo.mkdir()
+        (tmp_path / "link").symlink_to(repo)
+        assert procs.in_repo(repo, tmp_path / "link")
+        twin = tmp_path / "repo"
+        if twin.exists():
+            assert procs.in_repo(repo, twin)

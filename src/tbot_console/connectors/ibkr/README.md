@@ -40,8 +40,9 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
 ```
 
 - `IBKRClient` — `connect`/`disconnect` (also an async context manager), `qualify`,
-  `fetch_quote`/`fetch_quotes`, `fetch_bars` (the last `count` bars, or with `since=` only the
-  bars from that moment on, asked in seconds while the span is under a day — the cheap way to
+  `fetch_quote`/`fetch_quotes` (the contracts a call has not seen yet are looked up
+  concurrently), `fetch_bars` (the last `count` bars, or with `since=` every bar from that moment
+  on whatever `count` says, asked in seconds while the span is under a day — the cheap way to
   refresh a series you already hold), `fetch_option_chain`, `fetch_executions` (the account's
   fills IB reports — the current trading day unless TWS keeps more — as `IBKRExecution`:
   `buy`/`sell`, shares, price, epoch time, order and perm ids, optionally for one `symbol` and
@@ -69,12 +70,16 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
   live-trading guard.
 - Every venue failure surfaces as `tbot_console.core.exceptions.ExchangeRequestError` (carrying
   IB's numeric error code) or `ExchangeConnectionError` — never a raw `ib_async` exception and
-  never a silent empty answer. `fetch_bars` and `scan` raise for an error IB reports on their own
+  never a silent empty answer. That includes a call made while the gateway is down: ib_async's
+  request methods send at once and raise its `ConnectionError("Not connected")`, so every request
+  is started inside the client's own error mapping (`IBKRClient._request`). `fetch_bars` and `scan` raise for an error IB reports on their own
   request; `fetch_bars` returns `[]` only for IB's "HMDS query returned no data" (code 162) and
   raises `ExchangeConnectionError` for a history IB never answered within the timeout;
   `fetch_quotes` leaves out (and logs with its code) an instrument whose snapshot IB refused, so
   a refused quote is never read as a live one. Notices are not failures: 165, 10090 (partly
-  subscribed), 10167 (delayed data shown) and the 2100–2199 farm-status messages.
+  subscribed), 10167 (delayed data shown) and the 2100–2199 farm-status messages — except that
+  ib_async ends a snapshot on 10090, so an instrument whose snapshot 10090 cut short before any
+  price arrived is left out and logged rather than reported with no prices.
 
 ## Scanners
 
@@ -178,7 +183,8 @@ async with IBKRClient(IBKRConfig.from_env()) as client:          # IBKR_MARKET_D
 - Callbacks behave like `watch_scan`'s: sync or async; one that raises is logged and the stream
   goes on.
 - **A refusal is an error, never silence.** `watch_*` waits up to `STREAM_CONFIRM_S` (1 s, or
-  the config's `timeout` if shorter) for IB to refuse the request and then raises
+  the config's `timeout` if shorter) for IB to refuse the request — a refusal that lands as the
+  wait runs out still counts — and then raises
   `ExchangeRequestError` with IB's code and a plain reading of it (`STREAM_REFUSALS`): 309 and
   10190 (too many depth or tick-by-tick streams), 10092 (no depth for this security type on this
   exchange), 354, 10089, 10168, 10186 (no market data subscription), 10189 (no tick-by-tick
@@ -273,21 +279,28 @@ async with trader:                                  # refuses a live account wit
   each order. If IB rejects one, the call's unfilled entries are cancelled (their children go with
   them), orders guarding shares already filled stay, and `OrderRejectedError` carries IB's code
   and reason. An order IB has not confirmed in time comes back `PendingSubmit` with a warning;
-  its fate arrives through `watch_orders`.
+  its fate arrives through `watch_orders`. Once sent, every leg counts as transmitted, so
+  cancelling a leg IB has not confirmed yet waits for IB (`PendingCancel`) instead of ib_async's
+  local `Cancelled` for an untransmitted order.
 - `modify(order_id, *, price=None, stop=None, shares=None)` — e.g. the stop to breakeven after
   the first target; it waits for IB's answer and raises `ExchangeRequestError` with IB's code
-  when the change is refused. `cancel(order_id)`. `cancel_chain(parent_id)` cancels everything
+  when the change is refused. A target or stop never covers more shares than its entry.
+  `cancel(order_id)`. `cancel_chain(parent_id)` cancels everything
   of the chain (and of the other chains sent under the same `ref`) that still works: an unfilled
   entry takes its children down with it; after a fill only the remaining children go.
+  `parent_id` is the entry's order id; 0 (what an entry or a single limit reports as its own
+  `parent_id`) is refused rather than read as "every order without a parent".
   `reqGlobalCancel` is never exposed — it cancels every order of the account, other clients'
   and manual ones included.
 - `watch_orders(callback)` → `OrderWatch` (`stop_orders(watch)`): `OrderEvent(kind, order_id,
   perm_id, parent_id, ref, role, symbol, side, shares, filled, remaining, avg_price, status,
   code, reason, time)` for the orders of this connection's client id, from `orderStatusEvent`,
   `execDetailsEvent` and `errorEvent`. Kinds: `accepted`, `partial`, `filled`, `cancelled`,
-  `rejected` (IB 201, `Inactive`, an error on an order never accepted), `notice` (warnings such as
+  `rejected` (IB 201, `Inactive`, an error on an order never accepted, and 321 on a new order —
+  e.g. TWS's Read-Only API — which ib_async marks `ValidationError`), `notice` (warnings such as
   110, 399, 2109 — the order stays live). 202 reads as `cancelled` with IB's reason. `accepted`
-  and each terminal kind come once per order, `partial` once per new fill. Callbacks as
+  and each terminal kind come once per order, `partial` once per new fill; a fill is reported
+  even after a `cancelled` or `rejected`, because IB's executions are the fact. Callbacks as
   `watch_scan`'s.
 - `fetch_positions()` → `IBKRPosition(account, symbol, instrument, shares, avg_price)` of the
   traded account (`avg_price` per share or per unit of a derivative: IB's `avgCost` divided by the
@@ -417,7 +430,9 @@ reaches only the trading processes of a unit whose console switch is on
 - **ib_async marks a refused change as cancelled.** For an error (not a warning) on an existing
   order ib_async sets the trade's status to `Cancelled`, even when IB refused only the
   modification and the order still works with its old values. `modify` raises IB's code and says
-  so; `fetch_open_orders()` shows what IB really holds.
+  so, reports the refusal as a `notice` and puts the order's status back, so it stays working for
+  `cancel` and `modify` and its later fills arrive; `fetch_open_orders()` shows what IB really
+  holds.
 - **Children wait as `PreSubmitted`.** A bracket's target and stop are held at IB until their
   entry fills; they become `Submitted` then.
 - **One `Ticker` per contract.** ib_async keys tickers by `conId`, so a contract's quotes, depth
@@ -430,7 +445,14 @@ reaches only the trading processes of a unit whose console switch is on
   id and by contract) instead of flipping that switch, because the switch is global to the `IB`
   object and would make one refused contract fail a whole multi-contract snapshot. ib_async also
   counts 321 (request validation) as a warning and keeps waiting for the answer; the client
-  still reports it once the request ends.
+  still reports it once the request ends. On a new order 321 means IB never took it (status
+  `ValidationError`): the trader raises `OrderRejectedError` for it, emits `rejected` and frees its
+  `ref`.
+- **ib_async keeps one pending answer per request name.** Open orders, positions, scanner
+  parameters and depth exchanges are keyed by name, not by request id, so a second overlapping
+  request would orphan the first caller's answer. The client runs each of them under its own lock
+  (the trader's `ref` check shares the open-orders one), and `scan_vocabulary` downloads the
+  catalogue once for concurrent first callers.
 - **One client id per connection.** A second client reusing `IBKR_CLIENT_ID` is refused by the
   gateway; give parallel processes distinct ids.
 - **Ambiguous contracts.** `reqContractDetails` can return several matches (same ticker on

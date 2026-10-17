@@ -37,7 +37,10 @@ makes the same relative paths resolve for node, tsc and biome.
 needs no code. Path, query, body, status and `content-type` pass through as bytes (a large JSON
 answer is never re-parsed in the console), plus `cache-control`, `etag` and `last-modified`. It
 is not an endpoint whitelist: the target hosts are loopback-only and come from the manifests,
-and a whitelist in the shell would make every new endpoint a console release. Path segments are
+and a whitelist in the shell would make every new endpoint a console release. The shared
+`httpx.AsyncClient` ignores proxy settings (`trust_env=False`): `HTTP_PROXY`/`ALL_PROXY` from a
+shell or the macOS system proxy would otherwise route loopback calls to a proxy host, and a SOCKS
+`ALL_PROXY` without `socksio` would make every call fail. Path segments are
 re-quoted, `.`/`..`/empty segments answer 404, an unknown id or a unit without `api` answers 404,
 and a method the service does not serve answers whatever the service says. A service that is
 down answers 503 with a hint naming the home page button and the command
@@ -74,7 +77,7 @@ files are served unauthenticated; security headers (CSP plus `control.service.SE
 nosniff, DENY, no-referrer) go on every response, proxied ones included; `app.main()` refuses a
 non-loopback bind without a token. Under `tbot` the console takes no address from an env file
 (`procs.FILE_DROPPED_KEYS`), so it listens on loopback; a hand start (`uv run tbot-web`) reads
-`.env` whole. Unit services have no token of their own and `control.service.serve()` refuses any
+`.env` whole except the trading switches (`procs.TRADING_SWITCH_KEYS`). Unit services have no token of their own and `control.service.serve()` refuses any
 non-loopback bind.
 
 `__init__.py` is empty — consumers import submodules directly. FastAPI and uvicorn are core

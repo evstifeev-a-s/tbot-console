@@ -115,6 +115,23 @@ class TestDiscovery:
         assert found.broken[0].file == "config/workspace.json"
         assert found.get("console").listen_port("web") == registry.CONSOLE_PORT
 
+    def test_a_manifest_not_in_utf8_is_one_broken_entry(self, home):
+        text = json.dumps(unit("beta") | {"title": "Бета"}, ensure_ascii=False)
+        (paths.units_dir(home) / "beta.json").write_bytes(text.encode("cp1251"))
+        found = load_registry()
+        assert [u.id for u in found.units] == ["console", "alpha"]
+        assert [b.file for b in found.broken] == ["config/units/beta.json"]
+        assert "не в кодировке UTF-8" in found.broken[0].error
+        assert cli.main(["ps"]) == 0
+
+    def test_a_workspace_file_not_in_utf8_keeps_the_home(self, home, other):
+        body = json.dumps({"roots": [str(other)]})
+        paths.workspace_file(home).write_bytes(body.encode("utf-16"))
+        found = load_registry()
+        assert [u.id for u in found.units] == ["console", "alpha"]
+        assert found.broken[0].file == "config/workspace.json"
+        assert "не в кодировке UTF-8" in found.broken[0].error
+
     def test_the_workspace_sets_the_console_port(self, home):
         workspace(home, console_port=18520)
         assert load_registry().get("console").listen_port("web") == 18520
