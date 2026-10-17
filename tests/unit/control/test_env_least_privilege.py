@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from tbot_console.control import paths, procs
+from tbot_console.control.live import LIVE_TRADING_ENV
 from tests.unit.control.helpers import FIXTURE_UNITS
 
 ENV_FILE = {
@@ -17,11 +18,13 @@ ENV_FILE = {
     "IBKR_PORT": "7497",
     "IBKR_ACCOUNT": "DU0",
     "IBKR_WRITABLE": "true",
+    LIVE_TRADING_ENV: "true",
     "SERVICE_CLIENT_SECRET": "s",
     "ALPHA_DRY_RUN": "false",
     "MESSENGER_BOT_TOKEN": "t",
 }
 LOADED = {"BETA_USER_AGENT", "BETA_DATA_DIR", "IBKR_PORT"}
+SWITCHES = {"IBKR_WRITABLE", LIVE_TRADING_ENV}
 
 
 @pytest.fixture
@@ -55,9 +58,21 @@ def test_a_supervised_process_does_not_read_the_env_file(hand_start):
     assert not {key for key in ENV_FILE if key in os.environ}
 
 
-def test_without_a_unit_the_whole_env_file_is_loaded(hand_start):
+def test_without_a_unit_the_env_file_is_loaded_except_the_trading_switches(hand_start):
     procs.load_env_file()
-    assert {key: os.environ[key] for key in ENV_FILE} == ENV_FILE
+    rest = {key: value for key, value in ENV_FILE.items() if key not in SWITCHES}
+    assert {key: os.environ[key] for key in rest} == rest
+    assert not SWITCHES & os.environ.keys()
+
+
+@pytest.mark.parametrize("unit", [None, "alpha"])
+def test_a_trading_switch_spelled_in_lowercase_is_dropped_too(hand_start, unit):
+    (hand_start / ".env").write_text(
+        f"{LIVE_TRADING_ENV.lower()}=true\nibkr_writable=true\nALPHA_DRY_RUN=false\n",
+        encoding="utf-8",
+    )
+    procs.load_env_file(unit)
+    assert not SWITCHES & {key.upper() for key in os.environ}
 
 
 def test_a_missing_manifest_stops_the_start_before_reading_the_env_file(hand_start):
