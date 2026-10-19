@@ -31,6 +31,7 @@ from tbot_console.connectors.ibkr.instruments import (
 )
 from tbot_console.connectors.ibkr.journal import OrderJournal, read_journal
 from tbot_console.connectors.ibkr.models import (
+    AccountSummary,
     ContractSpec,
     DepthBook,
     DepthExchange,
@@ -81,6 +82,7 @@ from tbot_console.connectors.ibkr.streams import (
 from tbot_console.connectors.ibkr.trader import IBKRTrader, OrderWatch
 
 __all__ = [
+    "AccountSummary",
     "BAR_SIZE",
     "DEFAULT_EXCHANGE",
     "DEFAULT_STREAM_LIMIT",

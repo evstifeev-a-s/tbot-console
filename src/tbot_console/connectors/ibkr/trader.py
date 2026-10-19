@@ -29,6 +29,7 @@ from tbot_console.connectors.ibkr.config import IBKRConfig, live_trading_allowed
 from tbot_console.connectors.ibkr.instruments import IBKRInstrument, SecType
 from tbot_console.connectors.ibkr.journal import OrderJournal
 from tbot_console.connectors.ibkr.models import (
+    AccountSummary,
     ContractSpec,
     IBKRPosition,
     MarginImpact,
@@ -775,6 +776,11 @@ class IBKRTrader:
     async def fetch_positions(self) -> list[IBKRPosition]:
         account = self._require_ready()
         return [p for p in await self._client.fetch_positions() if p.account == account]
+
+    async def fetch_account_summary(self) -> AccountSummary | None:
+        account = self._require_ready()
+        found = await self._client.fetch_account_summary()
+        return next((s for s in found if s.account == account), None)
 
     async def what_if(
         self,

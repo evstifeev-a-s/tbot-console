@@ -11,6 +11,7 @@ from typing import Any
 from eventkit import Event
 from ib_async import Contract, ContractDetails, ScanData, ScannerSubscription, Ticker
 from ib_async.objects import (
+    AccountValue,
     BarData,
     BarDataList,
     CommissionReport,
@@ -130,6 +131,7 @@ class FakeIB:
         self.modify_error: tuple[int, str] | None = None
         self.modify_refusal: tuple[int, str] | None = None
         self.position_rows: list[Position] = []
+        self.account_rows: list[AccountValue] = []
         self.what_if_state: OrderState | None = None
         self.what_if_errors: list[tuple[int, str]] = []
         self.what_if_calls: list[Order] = []
@@ -337,6 +339,10 @@ class FakeIB:
     async def reqPositionsAsync(self) -> list[Position]:
         self._maybe_raise("positions")
         return list(self.position_rows)
+
+    async def accountSummaryAsync(self, account: str = "") -> list[AccountValue]:
+        self._maybe_raise("account_summary")
+        return [row for row in self.account_rows if not account or row.account == account]
 
     async def whatIfOrderAsync(self, contract: Contract, order: Order) -> OrderState | list[Any]:
         self.what_if_calls.append(order)
