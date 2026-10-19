@@ -13,6 +13,7 @@ from typing import Any, Literal, TypeVar, overload
 
 from ib_async import (
     IB,
+    AccountValue,
     Contract,
     ContractDetails,
     ExecutionFilter,
@@ -36,6 +37,7 @@ from tbot_console.connectors.ibkr.instruments import (
     SecType,
 )
 from tbot_console.connectors.ibkr.models import (
+    AccountSummary,
     ContractSpec,
     DepthExchange,
     IBKRExecution,
@@ -221,6 +223,14 @@ def _finite(value: float | None) -> float | None:
     return float(value)
 
 
+def _amount(value: Any) -> float | None:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return None
+    return amount if math.isfinite(amount) else None
+
+
 def _size(value: float | None) -> float:
     if value is None or math.isnan(value) or value < 0:
         return 0.0
@@ -390,6 +400,35 @@ def position_from(row: Position) -> IBKRPosition:
         shares=_to_float(row.position),
         avg_price=cost / multiplier if multiplier > 1 else cost,
     )
+
+
+SUMMARY_TAGS = {
+    "NetLiquidation": "net_liquidation",
+    "TotalCashValue": "cash",
+    "BuyingPower": "buying_power",
+}
+
+
+def summaries_from(rows: Iterable[AccountValue], account: str = "") -> list[AccountSummary]:
+    found: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = SUMMARY_TAGS.get(row.tag)
+        if key is None or not row.account or (account and row.account != account):
+            continue
+        slot = found.setdefault(row.account, {"currency": row.currency})
+        slot[key] = _amount(row.value)
+        if key == "net_liquidation":
+            slot["currency"] = row.currency
+    return [
+        AccountSummary(
+            account=name,
+            currency=str(slot.get("currency") or ""),
+            net_liquidation=slot.get("net_liquidation"),
+            cash=slot.get("cash"),
+            buying_power=slot.get("buying_power"),
+        )
+        for name, slot in sorted(found.items())
+    ]
 
 
 def hits_from_scan_data(rows: Iterable[ScanData]) -> list[ScanHit]:
@@ -731,6 +770,13 @@ class IBKRClient:
             if _to_float(row.position) != 0 and (not account or row.account == account)
         ]
         return sorted(out, key=lambda p: (p.account, p.symbol))
+
+    async def fetch_account_summary(self) -> list[AccountSummary]:
+        async with self._keyed_lock("accountSummary"):
+            rows = await self._request(
+                self._ib.accountSummaryAsync, "account summary", limit=self._config.timeout
+            )
+        return summaries_from(rows, self._config.account or "")
 
     async def fetch_option_chain(self, underlying: IBKRInstrument) -> list[OptionChainSpec]:
         spec = await self.qualify(underlying)

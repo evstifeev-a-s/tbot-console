@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
-from ib_async import IB, Contract, ContractDetails
+from ib_async import IB, AccountValue, Contract, ContractDetails
 from ib_async.objects import OptionChain, OptionComputation
 from ib_async.wrapper import RequestError
 
@@ -24,6 +24,7 @@ from tbot_console.connectors.ibkr.client import (
 )
 from tbot_console.connectors.ibkr.config import IBKRConfig, MarketDataType
 from tbot_console.connectors.ibkr.instruments import IBKRInstrument, SecType
+from tbot_console.connectors.ibkr.models import AccountSummary
 from tbot_console.connectors.ibkr.scanner import ScanRequest
 from tbot_console.core.exceptions import ExchangeConnectionError, ExchangeRequestError
 
@@ -708,6 +709,7 @@ DISCONNECTED_CALLS: list[Callable[[IBKRClient], Awaitable[Any]]] = [
     lambda c: c.fetch_executions(),
     lambda c: c.fetch_open_orders(),
     lambda c: c.fetch_positions(),
+    lambda c: c.fetch_account_summary(),
     lambda c: c.fetch_option_chain(AAPL),
     lambda c: c.scan_vocabulary(),
     lambda c: c.depth_exchanges(),
@@ -737,6 +739,7 @@ async def answer_in_turn(
     [
         ("reqAllOpenOrdersAsync", lambda c: c.fetch_open_orders()),
         ("reqPositionsAsync", lambda c: c.fetch_positions()),
+        ("accountSummaryAsync", lambda c: c.fetch_account_summary()),
         ("reqMktDepthExchangesAsync", lambda c: c.depth_exchanges()),
     ],
 )
@@ -772,3 +775,26 @@ async def test_concurrent_first_scans_load_the_vocabulary_once(
     first, second = await asyncio.gather(client.scan_vocabulary(), client.scan_vocabulary())
     assert first is second
     assert calls == [1]
+
+
+def account_value(account: str, tag: str, value: str, currency: str = "USD") -> AccountValue:
+    return AccountValue(account, tag, value, currency, "")
+
+
+async def test_the_account_summary_reads_the_value_cash_and_buying_power(ib: FakeIB):
+    ib.account_rows = [
+        account_value("DU1111111", "NetLiquidation", "10250.75"),
+        account_value("DU1111111", "TotalCashValue", "8000"),
+        account_value("DU1111111", "BuyingPower", "41000.5"),
+        account_value("DU1111111", "NetLiquidationByCurrency", "10250.75", "BASE"),
+        account_value("DU1111111", "AccountType", "INDIVIDUAL", ""),
+        account_value("DU2222222", "NetLiquidation", "not a number"),
+    ]
+    client = IBKRClient(IBKRConfig(), ib=ib)
+    found = await client.fetch_account_summary()
+    assert found == [
+        AccountSummary("DU1111111", "USD", 10250.75, 8000.0, 41000.5),
+        AccountSummary("DU2222222", "USD", None, None, None),
+    ]
+    only = IBKRClient(IBKRConfig(account="DU2222222"), ib=ib)
+    assert [s.account for s in await only.fetch_account_summary()] == ["DU2222222"]

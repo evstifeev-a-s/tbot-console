@@ -55,7 +55,11 @@ async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 12
   `symbol`, only the configured `account` when one is set, in placing order, each with its
   `ref` (`orderRef`); bounded by the config's `timeout`; a read call that changes nothing),
   `fetch_positions` (the account's non-zero positions as `IBKRPosition`, only the configured
-  `account` when one is set), the scanner:
+  `account` when one is set), `fetch_account_summary` (one `AccountSummary` per account of the
+  login, only the configured `account` when one is set: the net liquidation value, the cash and
+  the buying power IB's account summary reports, in the account's base currency, a value IB
+  sends as text that is not a number reads as `None`; bounded by the config's `timeout`), the
+  scanner:
   `scan`, `scan_vocabulary`, `watch_scan`/`stop_scan`, and depth and tape (below):
   `watch_depth`/`stop_depth`, `depth_exchanges`, `watch_tape`/`stop_tape`, `fetch_ticks`,
   `active_streams`. Contract lookups are memoized per client
@@ -305,6 +309,8 @@ async with trader:                                  # refuses a live account wit
 - `fetch_positions()` → `IBKRPosition(account, symbol, instrument, shares, avg_price)` of the
   traded account (`avg_price` per share or per unit of a derivative: IB's `avgCost` divided by the
   multiplier); `IBKRClient.fetch_positions()` reads them on a read-only session too.
+  `fetch_account_summary()` → the traded account's `AccountSummary(account, currency,
+  net_liquidation, cash, buying_power)`, `None` when IB reports nothing for it.
   `what_if(instrument, side, shares, limit, …)` → `MarginImpact` — IB's margin and commission
   answer for a limit order that is never sent.
 - **Checks before sending**, each with its own `OrderCheckError` (journaled as `refused`) and
@@ -369,11 +375,11 @@ IB error 200.
 |---|---|
 | `instruments.py` | `SecType`, `IBKRInstrument` (frozen, validating), `parse`/`to_normalized`/`to_routed`, `DEFAULT_EXCHANGE`. No `ib_async` import |
 | `config.py` | `IBKRConfig` (+`from_env`, `stream_limit`), `Gateway`, `MarketDataType`, the `PORTS` table, the live-trading guard and `live_trading_allowed()`. No `ib_async` import |
-| `models.py` | Cold-path results: `IBKRQuote` (+`mid`/`spread`), `OptionGreeks`, `ContractSpec`, `OptionChainSpec` (+`nearest_strikes`), `IBKRExecution`, `IBKROrder` (+`ref`), `IBKRPosition`, `DepthLevel`/`DepthBook`/`DepthExchange`, `TapePrint`/`TapeQuote`, `Target`, `PlacedOrder`/`PlacedChain`, `OrderEvent`, `MarginImpact` |
+| `models.py` | Cold-path results: `IBKRQuote` (+`mid`/`spread`), `OptionGreeks`, `ContractSpec`, `OptionChainSpec` (+`nearest_strikes`), `IBKRExecution`, `IBKROrder` (+`ref`), `IBKRPosition`, `AccountSummary`, `DepthLevel`/`DepthBook`/`DepthExchange`, `TapePrint`/`TapeQuote`, `Target`, `PlacedOrder`/`PlacedChain`, `OrderEvent`, `MarginImpact` |
 | `scanner.py` | The scanner as pure logic: `ScanRequest`, `ScanHit`, `ScanType`/`ScanLocation`/`ScannerVocabulary`, `build_subscription` (the sentinel handling), `filter_options`, `parse_scanner_parameters` (the XML catalogue), `MAX_ROWS`/`MAX_ACTIVE_SCANS` |
 | `streams.py` | Depth and tape as pure logic: `apply_depth`/`BookState` (IB's row semantics), `depth_book`, `exchange_from`, `print_from_tick`/`quote_from_tick`/`quote_from_history`, `tape_from`/`history_from`, `fresh_ticks` (the paging dedupe), `STREAM_REFUSALS`/`refusal_message`, `StreamRefusedError`, `DepthWatch`/`TapeWatch`, `TICK_PAGE`, `STREAM_CONFIRM_S` |
 | `orders.py` | Orders as pure logic: `plan_bracket` (`BracketPlan`/`Portion`: the checks and the split into parts), `check_ticks`/`price_step`/`snap`, `check_value`, the `checked_*` validators, `account_kind`/`mask_account`, `role_of`, `placed_from`/`described`, `LiveAccountError`, `OrderCheckError`, `OrderRejectedError` |
-| `trader.py` | `IBKRTrader`: the account lock, placement, changes, cancels, `OrderWatch` and the event mapping, positions, `what_if` |
+| `trader.py` | `IBKRTrader`: the account lock, placement, changes, cancels, `OrderWatch` and the event mapping, positions, the account summary, `what_if` |
 | `journal.py` | `OrderJournal` (append + `fsync`, a torn last line mended) and `read_journal` |
 | `client.py` | `IBKRClient`; the ib_async↔ours row translation — `build_contract`, `instrument_from_contract`, `spec_from_details`, `candle_from_bar` (→ `analysis.models.Candle`), `quote_from_ticker`, `hits_from_scan_data`, `execution_from_fill`, `order_from_trade`, `position_from`; `duration_for`, `duration_since`, `bar_timestamp`; `RequestErrors` (the per-call `errorEvent` listener), `is_notice`, `is_no_data`; `BAR_SIZE`, `WHAT_TO_SHOW`, `MAX_DURATION_DAYS`; `ScanWatch` |
 

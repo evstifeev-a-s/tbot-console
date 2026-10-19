@@ -142,6 +142,15 @@ class IBKRPosition:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountSummary:
+    account: str
+    currency: str
+    net_liquidation: float | None
+    cash: float | None
+    buying_power: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class MarginImpact:
     init_margin_change: float | None
     maint_margin_change: float | None

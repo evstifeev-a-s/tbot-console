@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from ib_async import Contract
 from ib_async.ib import StartupFetchALL
-from ib_async.objects import Position
+from ib_async.objects import AccountValue, Position
 from ib_async.order import Order, OrderState, Trade
 from ib_async.util import UNSET_DOUBLE
 
@@ -673,6 +673,16 @@ class TestPositionsAndWhatIf:
             IBKRPosition(ACCOUNT, "DEMO", positions[1].instrument, -2, 1.25),
         ]
         assert len(await trader.client.fetch_positions()) == 3
+
+    async def test_the_account_summary_is_the_traded_accounts(self, trader: IBKRTrader, ib: FakeIB):
+        ib.account_rows = [
+            AccountValue(ACCOUNT, "NetLiquidation", "5000", "USD", ""),
+            AccountValue("DU7654321", "NetLiquidation", "90000", "USD", ""),
+        ]
+        found = await trader.fetch_account_summary()
+        assert found is not None and (found.account, found.net_liquidation) == (ACCOUNT, 5000.0)
+        ib.account_rows = []
+        assert await trader.fetch_account_summary() is None
 
     async def test_what_if_reads_the_margin_impact(self, trader: IBKRTrader, ib: FakeIB):
         ib.what_if_state = OrderState(
