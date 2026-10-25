@@ -20,6 +20,7 @@ from tests.unit.control.helpers import fixture_manifest, write_manifest
 def units(root: Path) -> dict[str, UnitManifest]:
     write_manifest(root, fixture_manifest("alpha"))
     write_manifest(root, fixture_manifest("beta"))
+    write_manifest(root, fixture_manifest("gamma"))
     found = load_registry(root)
     return {unit.id: unit for unit in found.units}
 
@@ -104,6 +105,9 @@ class TestChildEnvironment:
                 "alpha:bot": (units["alpha"], "bot"),
                 "alpha:api": (units["alpha"], "api"),
                 "beta:api": (units["beta"], "api"),
+                "gamma:api": (units["gamma"], "api"),
+                "gamma:feed": (units["gamma"], "feed"),
+                "gamma:trader": (units["gamma"], "trader"),
                 "console:web": (console_manifest(), "web"),
             }
             return {
@@ -114,13 +118,18 @@ class TestChildEnvironment:
         assert set(flags().values()) == {None}
         live.change(root, "alpha", True, "console")
         live.change(root, "beta", True, "console")
+        live.change(root, "gamma", True, "console")
         assert flags() == {
             "alpha:bot": "true",
             "alpha:api": None,
             "beta:api": None,
+            "gamma:api": None,
+            "gamma:feed": None,
+            "gamma:trader": "true",
             "console:web": None,
         }
         live.change(root, "alpha", False, "console")
+        live.change(root, "gamma", False, "console")
         assert set(flags().values()) == {None}
 
     def test_an_env_file_never_supplies_the_flag(self, root: Path, units: dict[str, UnitManifest]):
@@ -179,6 +188,9 @@ class TestCommand:
         assert switch_file(root)["units"]["alpha"]["via"] == "cli"
         assert cli.main(["live", "alpha", "off"]) == 0
         assert not live.enabled(root, "alpha")
+        assert cli.main(["live", "gamma", "on"]) == 0
+        assert "gamma:trader: действует со следующего запуска" in capsys.readouterr().out
+        assert live.enabled(root, "gamma")
 
     def test_a_running_process_is_told_to_restart(
         self, root: Path, units: dict[str, UnitManifest], capsys, monkeypatch

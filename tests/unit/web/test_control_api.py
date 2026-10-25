@@ -233,6 +233,16 @@ class TestLiveTrading:
             "заявки только на бумажный счёт (в консоли)",
         ]
 
+    def test_a_unit_with_one_process_that_places_orders_gets_the_switch(self, console, root):
+        write_manifest(root, fixture_manifest("gamma"))
+        gamma = console.get("/api/control/units").json()["units"][3]
+        assert gamma["places_orders"] is True
+        assert gamma["live_trading"]["enabled"] is False
+        assert [p["live_trading"] is not None for p in gamma["processes"]] == [False, False, True]
+        url = "/api/control/units/gamma/live-trading"
+        assert console.post(url, json={"enabled": True}, headers=CONSOLE).status_code == 200
+        assert live.enabled(root, "gamma")
+
     @pytest.mark.parametrize(
         ("url", "code"),
         [

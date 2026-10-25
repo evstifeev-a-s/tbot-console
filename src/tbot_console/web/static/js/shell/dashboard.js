@@ -75,6 +75,8 @@ export const PHASE_LABELS = {
 
 const TRADES_TIP =
   "Эта стратегия сама отправляет заявки на биржу: запуск и остановка её бота меняют то, как ведутся открытые позиции.";
+const PROC_TRADES_TIP =
+  "Этот процесс сам отправляет заявки брокеру: его запуск и остановка меняют то, как ведутся открытые позиции.";
 const PID_TIP = "Номер процесса в операционной системе — по нему программу видно в команде ps.";
 const LIVE_STATES = new Set(["running", "foreign", "stuck"]);
 const BAD_STATES = new Set(["exited", "stuck", "interrupted"]);
@@ -195,7 +197,14 @@ export function processRows(unit, proc, { nowSec, onAction, compact = false }) {
     h(
       "td",
       {},
-      h("div", { class: "proc-title" }, String(proc?.title || proc?.name || "")),
+      h(
+        "div",
+        { class: "proc-title" },
+        String(proc?.title || proc?.name || ""),
+        proc?.live_trading
+          ? h("span", { class: "dash-badge trades", "data-tip": PROC_TRADES_TIP }, "ставит заявки")
+          : null,
+      ),
       h("div", { class: "proc-name mono muted" }, String(proc?.name ?? "")),
     ),
     stateCell,

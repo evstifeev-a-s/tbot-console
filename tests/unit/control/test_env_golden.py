@@ -74,7 +74,7 @@ def test_broken_manifests_still_contribute_their_dropped_prefixes(tmp_path):
     units = prepare(tmp_path, "A")
     rewrite(tmp_path, "beta", {"api.port": 5432})
     rewrite(tmp_path, "alpha", {"restart": "always"})
-    assert [unit.id for unit in load_registry(tmp_path).units] == ["console"]
+    assert [unit.id for unit in load_registry(tmp_path).units] == ["console", "gamma"]
     assert results(tmp_path, units) == golden("A")
 
 

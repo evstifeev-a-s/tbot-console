@@ -87,7 +87,7 @@ def cmd_live(home: Path, registry: Registry, target: str, action: str) -> int:
             "переключатель действует на всю стратегию: tbot live <стратегия> on|off|status"
         )
     unit = _targets(registry, target)[0][0]
-    if not unit.places_orders:
+    if not unit.trading:
         raise CliError(f"«{unit.id}» не ставит заявки — переключатель живой торговли ему не нужен")
     if action == "status":
         current = live.state(home, unit.id)
@@ -118,8 +118,25 @@ def _run(
     return operation.execute(pid)
 
 
+def _without_named_only(
+    pairs: list[tuple[UnitManifest, str]], action: str, target: str
+) -> list[tuple[UnitManifest, str]]:
+    if ":" in target:
+        return pairs
+    kept = []
+    for unit, proc in pairs:
+        if unit.processes[proc].places_orders:
+            print(
+                f"{unit.id}:{proc}: ставит заявки — команды на всю стратегию его не трогают: "
+                f"uv run tbot {action} {unit.id}:{proc}"
+            )
+        else:
+            kept.append((unit, proc))
+    return kept
+
+
 def cmd_action(registry: Registry, action: str, target: str) -> int:
-    pairs = _targets(registry, target)
+    pairs = _without_named_only(_targets(registry, target), action, target)
     if action == "stop":
         return max(
             (_run(registry.base(unit), unit, proc, action) for unit, proc in reversed(pairs)),

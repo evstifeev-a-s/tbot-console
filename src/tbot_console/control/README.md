@@ -56,7 +56,9 @@ ops.Operation(base, unit, "bot", "restart", ops.new_op_id()).execute()
 ```
 
 CLI (`[project.scripts] tbot`, run as `uv run tbot …` from a unit repo): `ps`, `start|stop|restart
-<unit>[:<proc>]` (a whole unit = every process in manifest order, stop in reverse), `check
+<unit>[:<proc>]` (a whole unit = every process in manifest order, stop in reverse; a process with
+its own `places_orders` is left out of a whole-unit command, which prints the command that reaches
+it), `check
 <unit>[:<proc>]`, `adopt <unit>:<proc> [--pid N]`, `live <unit> on|off|status` (the live-trading
 switch below; `on`/`off` name the trading processes a change reaches only after a restart), `up` (every `autostart` process that is not
 running; trading bots never autostart; ends with `консоль: http://127.0.0.1:<port>` when the
@@ -118,8 +120,8 @@ Guarantees an operation gives, whatever starts it (console button or CLI):
   also builds the child's environment and finds the interpreter before the stop, so an env file
   that cannot be read leaves any process running; a lock already held by another pid means
   "adopt it", never a second bot;
-- stop is SIGTERM and a wait of `stop_timeout_s`; a trading process (a `places_orders` unit's
-  `check: true` process) is never killed — the op fails with `stop_timeout` and the process shows
+- stop is SIGTERM and a wait of `stop_timeout_s`; a trading process (`unit.trades(proc)`) is
+  never killed — the op fails with `stop_timeout` and the process shows
   `stuck`; every other process, the trading unit's `api` service included, is SIGKILLed after the
   timeout;
 - readiness after a spawn: `http` (the health path answers 200, asked directly past any proxy
@@ -180,7 +182,7 @@ takes it over without a restart). Every view carries `label`, the state in Russi
 (`STATE_NAMES`), which `tbot ps` and the console print as is. `can`: stopped/exited/interrupted →
 `start`; running → `stop`, `restart`; stuck → `stop`; foreign → `adopt`. `confirm` is the
 process's manifest `confirm` when set, else the neutral `TRADING_CONFIRM` for trading processes
-(`places_orders` + `check`) and `CONSOLE_CONFIRM` for the system unit; the console asks before any
+(`unit.trades(proc)`) and `CONSOLE_CONFIRM` for the system unit; the console asks before any
 action on a process that has one. `live_trading` is `null` except on a trading process:
 `{"started": true | false | null, "restart": bool}` — the switch value the running process
 started with (`null` when it is not running or its start is unknown) and whether the switch has
@@ -196,7 +198,7 @@ lock `<unit>.<proc>.lock` and the op logs `ops/<op_id>.log`.
 
 | File | Responsibility |
 |---|---|
-| `manifest.py` | pydantic models of `config/units/<id>.json` (frozen, `extra="forbid"`): `UNIT_ID_PATTERN` and `RESERVED_IDS` (the console's own path segments: `api`, `js`, `css`, `vendor`, `static`, `processes`, …); process `env` keys are `TBOT_*` or wiring (`WIRING_KEY_RE`: `<PREFIX>_…_HOST`, `_ALLOWED_HOSTS`, `_CONFIG_PATH`, `_CONFIG_DIR`, `_DATA_DIR`; no ports — tbot passes `TBOT_PORT`) and never secret-looking (`SECRET_KEY_RE`: ends in `TOKEN`/`SECRET`/`PASSWORD`/`PASSWD`/`KEY`, `TBOT_*` included); `env_files` relative to the repo with no `..`; `EnvFilesIgnore` (`prefixes` like `XY_`, `keys`; never `TBOT_*`); `EnvFilesOnly` (`prefixes`, `keys`, at least one of them; `TBOT_*` allowed; `admits(key)`) for the optional `env_files_only`; `legacy_pages` (old top-level page names the console redirects to this unit; never its own id); a process `confirm` text (1–400 chars); in a `places_orders` unit every process except `api.process` has `check: true`, a trading process can never autostart, and every non-`TBOT_` `env` key has its first prefix in `env_files_ignore.prefixes`, so env files cannot supply the unit's other settings under that prefix; ports 1024–65535 except Postgres 5432/5433; the api process's `ready.port`, if set, equals `api.port`; `trades(proc)` (`places_orders` and `check`), `api_url()` (always `http://127.0.0.1:<api.port>`), `output_path()`, `ready_endpoint()`, `listen_port()` |
+| `manifest.py` | pydantic models of `config/units/<id>.json` (frozen, `extra="forbid"`): `UNIT_ID_PATTERN` and `RESERVED_IDS` (the console's own path segments: `api`, `js`, `css`, `vendor`, `static`, `processes`, …); process `env` keys are `TBOT_*` or wiring (`WIRING_KEY_RE`: `<PREFIX>_…_HOST`, `_ALLOWED_HOSTS`, `_CONFIG_PATH`, `_CONFIG_DIR`, `_DATA_DIR`; no ports — tbot passes `TBOT_PORT`) and never secret-looking (`SECRET_KEY_RE`: ends in `TOKEN`/`SECRET`/`PASSWORD`/`PASSWD`/`KEY`, `TBOT_*` included); `env_files` relative to the repo with no `..`; `EnvFilesIgnore` (`prefixes` like `XY_`, `keys`; never `TBOT_*`); `EnvFilesOnly` (`prefixes`, `keys`, at least one of them; `TBOT_*` allowed; `admits(key)`) for the optional `env_files_only`; `legacy_pages` (old top-level page names the console redirects to this unit; never its own id); a process `confirm` text (1–400 chars); a process `places_orders` (that process alone places orders) needs `check: true`; in a `places_orders` unit every process except `api.process` has `check: true`; a trading process can never autostart; every non-`TBOT_` `env` key of a trading process (of every process in a `places_orders` unit) has its first prefix in `env_files_ignore.prefixes`, so env files cannot supply the unit's other settings under that prefix; ports 1024–65535 except Postgres 5432/5433; the api process's `ready.port`, if set, equals `api.port`; `trades(proc)` (`check` and the unit's or the process's `places_orders`), `trading` (the unit or any of its processes places orders: the live-trading switch, `tbot live` and the console's badges), `api_url()` (always `http://127.0.0.1:<api.port>`), `output_path()`, `ready_endpoint()`, `listen_port()` |
 | `registry.py` | `load_registry(home)` → `Registry(units, broken, bases)` with the claim rules above, memoized 3 s (`MEMO_TTL_S`, `forget()`); `Registry.get(id)`, `base(unit)`, `ui_base(ui)`; `console_manifest(port)` (the built-in unit with id `CONSOLE_ID` = `console`, process `web`, `ready.port` = `console_port`); `Workspace` + `workspace(home)`; `root_problem(base)` (python present, `tbot-console` installed in the root's `.venv`, same major via `importlib.metadata.distributions(name=…, path=site_dirs)`); `parse_manifest(path)` (one file → `UnitManifest` or `Broken`, an unreadable, non-UTF-8 or non-JSON file included; the file name must equal the id); `load_root(base)` (one repo, clashing ports refuse every unit involved); `claim(home, roots, console)` (the cross-repo claim; also what `testing.manifest_problems` runs) |
 | `paths.py` | home (`TBOT_ROOT` or cwd), `units_dir`, `manifest_files()` (sorted `config/units/[!.]*.json`: hidden files such as `._x.json` / `.#x.json` are skipped), `workspace_file`, `live_trading_file`, `live_trading_log`, `ui_dir(base, ui)` = `<base>/js/units/<ui>`, `python(base)`, `site_dirs(base)`, `run/` state, op and lock files, op logs `run/ops/<op_id>.log` |
 | `procs.py` | `child_env(base, unit, proc)` (`file_env()`: `env_file_policy()` + `FILE_DROPPED_KEYS`, then `env_files_only`; `EnvPolicyError`; the live-trading flag from `live.enabled(home, unit)` for a trading process; `TBOT_PORT` from `unit.listen_port()`), `env_flag(pid, key)` (a variable of a running process, `None` when the OS hides it — psutil's `SystemError` on macOS included, like `find_instances()`), `supervised()`/`load_env_file(unit=None)`, `interpreter(base)` (the repo's python or `EnvPolicyError` «… выполните там `uv sync`»), `build_argv(spec, python)` (caffeinate), detached spawn, output rotation, pid identity (`start_mark(pid)`, `is_alive(pid, started, mark=None)`: the start mark when given, else `create_time`; a zombie counts as gone; `owned(base, pid, started, mark=None)`: alive and its cwd is in `base` per `in_repo()` or unreadable), SIGTERM/SIGKILL, port and lock holders, `find_instances()` (a process the OS refuses to describe, including psutil's `SystemError` on macOS, is skipped rather than failing the scan), `console_scripts(module, base)` and `runs_module(argv, module, base=…)` (`-m <module>` or a console script from the repo's `.venv` whose entry point lives in `<module>` or `<module>.__main__`) |
@@ -234,14 +236,16 @@ unit-service contract on a demo app), `test_status.py`,
 - **A second instance of an existing strategy:** another manifest with its own `id`, `api.port`
   and config-path wiring key in `env` (`<PREFIX>_CONFIG_PATH`); tbot passes `TBOT_UNIT` and
   `TBOT_PORT`, so the same service and UI serve any number of instances.
-- **A trading process:** `places_orders: true`, `check: true` (the module answers `--check`),
-  `autostart: false`, readiness `descriptor`, a generous `stop_timeout_s`. Its orders go through
+- **A trading process:** `places_orders: true` on the process, `check: true` (the module answers
+  `--check`), `autostart: false`, readiness `descriptor`, a generous `stop_timeout_s`. The unit's
+  other processes stay readers: no check, no autostart ban, no live flag. `places_orders: true` on
+  the unit still makes every `check: true` process trade and every process but the service checked. Its orders go through
   `connectors.ibkr.IBKRTrader`, whose `--check` can report `account_kind`; the live-trading switch
   is per unit id and needs no manifest change.
 - **A new manifest env key:** only wiring (an address or a path) that matches `WIRING_KEY_RE`, or
   `TBOT_*`; ports come from the manifest through `TBOT_PORT`, secrets stay in env files, trading
-  settings in the strategy config. A trading unit also lists the key's prefix in
-  `env_files_ignore.prefixes`.
+  settings in the strategy config. A trading process (any process of a `places_orders` unit) also
+  lists the key's prefix in `env_files_ignore.prefixes`.
 - **Settings that must never come from an env file:** the unit's `env_files_ignore` (a prefix or
   exact keys); it applies to every process of every unit of that repo, because the drop list is
   one union per repo.

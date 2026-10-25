@@ -78,3 +78,23 @@ def test_ps_names_a_broken_file_relative_to_the_home(root, capsys, monkeypatch):
     (paths.units_dir(root) / "x.json").write_text("{not json", encoding="utf-8")
     assert cli.main(["ps"]) == 0
     assert "ОШИБКА в config/units/x.json: не JSON" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("action", ["start", "restart", "stop"])
+def test_a_whole_unit_command_leaves_the_process_that_places_orders_alone(
+    root, started, capsys, action
+):
+    write_manifest(root, fixture_manifest("gamma"))
+    assert cli.main([action, "gamma"]) == 0
+    expected = ["gamma:api", "gamma:feed"]
+    assert started == (expected[::-1] if action == "stop" else expected)
+    assert f"uv run tbot {action} gamma:trader" in capsys.readouterr().out
+    assert cli.main([action, "gamma:trader"]) == 0
+    assert started[-1] == "gamma:trader"
+
+
+def test_a_unit_that_places_orders_as_a_whole_still_starts_as_a_whole(root, started, capsys):
+    write_manifest(root, fixture_manifest("alpha"))
+    assert cli.main(["start", "alpha"]) == 0
+    assert started == ["alpha:bot", "alpha:api"]
+    assert "ставит заявки" not in capsys.readouterr().out

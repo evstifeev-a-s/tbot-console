@@ -901,6 +901,10 @@ table.dash-procs td {
 .proc-title {
   font-weight: 600;
 }
+.proc-title .dash-badge {
+  margin-left: 8px;
+  font-weight: 400;
+}
 .proc-name {
   font-size: 11px;
 }
