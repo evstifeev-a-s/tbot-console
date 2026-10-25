@@ -25,7 +25,7 @@ CONSOLE_VERSION = version(DISTRIBUTION)
 STATUS_TIMEOUT = httpx.Timeout(3.5, connect=0.5)
 UNITS_TTL_S = 3.0
 OP_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-UNIT_FIELDS = {"id", "kind", "title", "sub", "order", "ui", "places_orders", "legacy_pages"}
+UNIT_FIELDS = {"id", "kind", "title", "sub", "order", "ui", "legacy_pages"}
 
 router = APIRouter(prefix="/api/control")
 
@@ -114,15 +114,14 @@ async def units_payload() -> dict[str, Any]:
         "units": [
             {
                 **unit.model_dump(include=UNIT_FIELDS),
+                "places_orders": unit.trading,
                 "glyph": unit.glyph or unit.id[:2].upper(),
                 "version": CONSOLE_VERSION if unit.id == CONSOLE_ID else None,
                 "api": api,
                 "processes": views[unit.id],
                 "status": status,
                 "status_error": error,
-                "live_trading": live.describe(switches.get(unit.id))
-                if unit.places_orders
-                else None,
+                "live_trading": live.describe(switches.get(unit.id)) if unit.trading else None,
             }
             for unit, (api, status, error) in zip(registry.units, statuses, strict=True)
         ],
@@ -187,7 +186,7 @@ def _trading_unit(unit_id: str) -> UnitManifest:
     unit = load_registry().get(unit_id)
     if unit is None:
         raise HTTPException(status_code=404, detail=f"консоль не знает «{unit_id}»")
-    if not unit.places_orders:
+    if not unit.trading:
         raise HTTPException(
             status_code=409,
             detail=f"«{unit.title}» не ставит заявки — переключатель живой торговли ему не нужен",

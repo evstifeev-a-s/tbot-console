@@ -67,6 +67,7 @@ class ProcessSpec(_Frozen):
     autostart: bool = False
     stop_timeout_s: int = Field(default=30, ge=1, le=900)
     check: bool = False
+    places_orders: bool = False
     confirm: str | None = Field(default=None, min_length=1, max_length=400)
     ready: ReadySpec = ReadySpec()
 
@@ -177,13 +178,19 @@ class UnitManifest(_Frozen):
             raise ValueError("у службы порт задаётся в api.port, ready.port должен совпадать с ним")
         if self.id in self.legacy_pages:
             raise ValueError(f"legacy_pages не может содержать собственное имя «{self.id}»")
+        unguarded = sorted(n for n, p in self.processes.items() if p.places_orders and not p.check)
+        if unguarded:
+            raise ValueError(
+                "процесс, который ставит заявки, проходит проверку перед каждым запуском: "
+                "check=true для " + ", ".join(unguarded)
+            )
+        eager = sorted(n for n, p in self.processes.items() if p.autostart and self.trades(n))
+        if eager:
+            raise ValueError(
+                "торговый процесс не запускается сам: autostart должен быть false для "
+                + ", ".join(eager)
+            )
         if self.places_orders:
-            eager = sorted(n for n, p in self.processes.items() if p.autostart and self.trades(n))
-            if eager:
-                raise ValueError(
-                    "торговый процесс не запускается сам: autostart должен быть false для "
-                    + ", ".join(eager)
-                )
             unchecked = sorted(
                 n
                 for n, p in self.processes.items()
@@ -194,17 +201,23 @@ class UnitManifest(_Frozen):
                     "у торговой стратегии каждый процесс, кроме службы, проходит проверку: "
                     "check=true для " + ", ".join(unchecked)
                 )
-            for key in sorted({name for spec in self.processes.values() for name in spec.env}):
-                prefix = key.split("_", 1)[0] + "_"
-                if prefix != PLATFORM_ENV_PREFIX and prefix not in self.env_files_ignore.prefixes:
-                    raise ValueError(
-                        f"торговая стратегия задаёт {key}, но не отбрасывает {prefix} "
-                        "из env-файлов: .env мог бы подменить её настройки"
-                    )
+        guarded = [p for p in self.processes.values() if self.places_orders or p.places_orders]
+        for key in sorted({name for spec in guarded for name in spec.env}):
+            prefix = key.split("_", 1)[0] + "_"
+            if prefix != PLATFORM_ENV_PREFIX and prefix not in self.env_files_ignore.prefixes:
+                raise ValueError(
+                    f"торговая стратегия задаёт {key}, но не отбрасывает {prefix} "
+                    "из env-файлов: .env мог бы подменить её настройки"
+                )
         return self
 
+    @property
+    def trading(self) -> bool:
+        return self.places_orders or any(p.places_orders for p in self.processes.values())
+
     def trades(self, proc: str) -> bool:
-        return self.places_orders and self.processes[proc].check
+        spec = self.processes[proc]
+        return spec.check and (self.places_orders or spec.places_orders)
 
     def api_url(self) -> str | None:
         return None if self.api is None else f"http://127.0.0.1:{self.api.port}"

@@ -169,6 +169,35 @@ class TestManifest:
             parse(data)
         unit = parse(fixture_manifest("alpha"))
         assert unit.trades("bot") and not unit.trades("api")
+        assert unit.trading
+
+    def test_one_process_can_place_orders_while_the_others_only_read(self):
+        unit = parse(fixture_manifest("gamma"))
+        assert unit.trading and not unit.places_orders
+        assert [name for name in unit.processes if unit.trades(name)] == ["trader"]
+        assert not parse(fixture_manifest("beta")).trading
+
+    def test_a_process_that_places_orders_is_checked_before_every_start(self):
+        data = fixture_manifest("gamma")
+        data["processes"]["trader"]["check"] = False
+        with pytest.raises(ValidationError, match="check=true для trader"):
+            parse(data)
+
+    def test_a_process_that_places_orders_never_starts_on_its_own(self):
+        data = fixture_manifest("gamma")
+        data["processes"]["trader"]["autostart"] = True
+        with pytest.raises(ValidationError, match="autostart должен быть false для trader"):
+            parse(data)
+
+    def test_only_the_process_that_places_orders_must_drop_its_prefix(self):
+        data = fixture_manifest("gamma")
+        data["processes"]["feed"]["env"] = {"GAMMA_CONFIG_PATH": "config/gamma.json"}
+        assert parse(data).processes["feed"].env == {"GAMMA_CONFIG_PATH": "config/gamma.json"}
+        data["processes"]["trader"]["env"] = {"GAMMA_CONFIG_PATH": "config/gamma.json"}
+        with pytest.raises(ValidationError, match="не отбрасывает GAMMA_ из env-файлов"):
+            parse(data)
+        data["env_files_ignore"] = {"prefixes": ["GAMMA_"]}
+        assert parse(data).trades("trader")
 
     def test_the_api_process_must_exist(self):
         data = fixture_manifest("alpha")

@@ -1,0 +1,35 @@
+{
+  "id": "gamma",
+  "kind": "strategy",
+  "title": "Гамма",
+  "glyph": "Г",
+  "sub": "вымышленная стратегия: советует, а заявки ставит один процесс",
+  "order": 30,
+  "api": {"process": "api", "port": 18603},
+  "processes": {
+    "api": {
+      "title": "Служба гаммы",
+      "module": "gamma_unit.webapp",
+      "env_files": [".env"],
+      "autostart": true,
+      "stop_timeout_s": 20,
+      "ready": {"kind": "http", "timeout_s": 60}
+    },
+    "feed": {
+      "title": "Сбор данных",
+      "module": "gamma_unit.feed",
+      "env_files": [".env"],
+      "stop_timeout_s": 20,
+      "ready": {"kind": "alive"}
+    },
+    "trader": {
+      "title": "Заявки по сигналам",
+      "module": "gamma_unit.trader",
+      "env_files": [".env"],
+      "stop_timeout_s": 60,
+      "check": true,
+      "places_orders": true,
+      "ready": {"kind": "descriptor", "timeout_s": 90}
+    }
+  }
+}

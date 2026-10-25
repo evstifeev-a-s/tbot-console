@@ -635,6 +635,24 @@ describe("live trading switch", () => {
     assert.equal(liveBadge(unit("alpha", { places_orders: true })).textContent, "бумажный счёт");
   });
 
+  it("marks the one process that places orders among the unit's readers", () => {
+    const dashboard = createDashboard({ onAction: () => {} });
+    const reader = proc({ name: "api", title: "Служба", live_trading: null });
+    const trader = proc({ live_trading: { started: false, restart: false } });
+    dashboard.update(
+      { units: [trading(false, { processes: [reader, trader] })], broken: [] },
+      null,
+    );
+    const marked = byClass(dashboard.root, "proc-title").filter(
+      (node) => byClass(node, "dash-badge").length > 0,
+    );
+    assert.deepEqual(
+      marked.map((node) => node.textContent),
+      ["Торговый ботставит заявки"],
+    );
+    assert.match(byClass(marked[0], "trades")[0].getAttribute("data-tip"), /сам отправляет заявки/);
+  });
+
   it("asks for a restart once the switch differs from what the process started with", () => {
     const dashboard = createDashboard({ onAction: () => {} });
     const stale = proc({ live_trading: { started: false, restart: true } });
