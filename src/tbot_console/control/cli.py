@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from importlib import resources
 from pathlib import Path
 
@@ -289,43 +290,60 @@ def cmd_json(registry: Registry, target: str | None) -> int:
     return 0
 
 
+def _one_target(registry: Registry, target: str, refusal: str) -> tuple[UnitManifest, str]:
+    (unit, proc), *rest = _targets(registry, target)
+    if rest:
+        raise CliError(refusal)
+    return unit, proc
+
+
+def _adopt(args: argparse.Namespace, _home: Path, registry: Registry) -> int:
+    unit, proc = _one_target(
+        registry, args.target, "укажите процесс: tbot adopt <стратегия>:<процесс>"
+    )
+    return _run(registry.base(unit), unit, proc, "adopt", pid=args.pid)
+
+
+def _op(args: argparse.Namespace, _home: Path, registry: Registry) -> int:
+    unit, proc = _one_target(registry, args.target, "_op нужен конкретный процесс")
+    return _run(registry.base(unit), unit, proc, args.action, op_id=args.op_id, pid=args.pid)
+
+
+def _action(args: argparse.Namespace, _home: Path, registry: Registry) -> int:
+    return cmd_action(registry, args.command, args.target)
+
+
+Command = Callable[[argparse.Namespace, Path, Registry], int]
+COMMANDS: frozendict[str, Command] = frozendict(
+    {
+        "ps": lambda _args, _home, registry: cmd_ps(registry),
+        "up": lambda _args, home, registry: cmd_up(home, registry),
+        "start": _action,
+        "stop": _action,
+        "restart": _action,
+        "check": lambda args, _home, registry: cmd_check(registry, args.target),
+        "adopt": _adopt,
+        "output": lambda args, _home, registry: cmd_output(registry, args.target, args.lines),
+        "ui-links": lambda _args, home, _registry: cmd_ui_links(home),
+        "json": lambda args, _home, registry: cmd_json(registry, args.target),
+        "live": lambda args, home, registry: cmd_live(home, registry, args.target, args.action),
+        "_op": _op,
+    }
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     home = paths.root()
     registry = load_registry(home)
+    command = COMMANDS.get(args.command)
+    if command is None:
+        return 2
     try:
-        if args.command == "ps":
-            return cmd_ps(registry)
-        if args.command == "up":
-            return cmd_up(home, registry)
-        if args.command in ("start", "stop", "restart"):
-            return cmd_action(registry, args.command, args.target)
-        if args.command == "check":
-            return cmd_check(registry, args.target)
-        if args.command == "adopt":
-            (unit, proc), *rest = _targets(registry, args.target)
-            if rest:
-                raise CliError("укажите процесс: tbot adopt <стратегия>:<процесс>")
-            return _run(registry.base(unit), unit, proc, "adopt", pid=args.pid)
-        if args.command == "output":
-            return cmd_output(registry, args.target, args.lines)
-        if args.command == "ui-links":
-            return cmd_ui_links(home)
-        if args.command == "json":
-            return cmd_json(registry, args.target)
-        if args.command == "live":
-            return cmd_live(home, registry, args.target, args.action)
-        if args.command == "_op":
-            (unit, proc), *rest = _targets(registry, args.target)
-            if rest:
-                raise CliError("_op нужен конкретный процесс")
-            return _run(
-                registry.base(unit), unit, proc, args.action, op_id=args.op_id, pid=args.pid
-            )
+        return command(args, home, registry)
     except (CliError, procs.EnvPolicyError) as e:
         print(f"tbot: {e}", file=sys.stderr)
         return 2
-    return 2
 
 
 if __name__ == "__main__":
