@@ -83,7 +83,7 @@ async def _status(unit: UnitManifest) -> tuple[dict[str, Any] | None, Any, str |
     if response.status_code != 200:
         try:
             detail = response.json().get("detail")
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             detail = None
         suffix = f": {detail}" if detail else ""
         return api, None, f"служба ответила кодом {response.status_code}{suffix}"

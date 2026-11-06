@@ -47,7 +47,7 @@ def read_journal(path: Path) -> list[dict[str, Any]]:
     for line in lines:
         try:
             record = json.loads(line.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError):
+        except UnicodeDecodeError, ValueError:
             continue
         if isinstance(record, dict):
             records.append(record)

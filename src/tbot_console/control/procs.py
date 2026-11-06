@@ -213,14 +213,14 @@ def _start_mark(process: psutil.Process) -> float:
 def create_time(pid: int) -> float | None:
     try:
         return _wall_start(psutil.Process(pid))
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError:
         return None
 
 
 def start_mark(pid: int) -> float | None:
     try:
         return _start_mark(psutil.Process(pid))
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError:
         return None
 
 
@@ -234,7 +234,7 @@ def is_alive(pid: int | None, started: float | None, mark: float | None = None) 
         if mark is not None:
             return abs(_start_mark(process) - mark) <= CREATE_TIME_TOLERANCE
         created = _wall_start(process)
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError:
         return False
     return started is None or abs(created - started) <= CREATE_TIME_TOLERANCE
 
@@ -273,7 +273,7 @@ def kill(pid: int) -> None:
 def cmdline(pid: int) -> list[str]:
     try:
         return psutil.Process(pid).cmdline()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError:
         return []
 
 
@@ -288,14 +288,14 @@ def env_flag(pid: int, key: str) -> bool | None:
 def cwd_of(pid: int) -> Path | None:
     try:
         return Path(psutil.Process(pid).cwd()).resolve()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError, OSError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError, OSError:
         return None
 
 
 def stdout_path(pid: int) -> Path | None:
     try:
         files = psutil.Process(pid).open_files()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError:
         return None
     for item in files:
         if item.fd == 1:
@@ -388,7 +388,7 @@ def port_holder(port: int) -> int | None:
             timeout=5,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError, subprocess.TimeoutExpired:
         found = None
     if found is not None:
         for line in found.stdout.split():
@@ -398,7 +398,7 @@ def port_holder(port: int) -> int | None:
         for conn in psutil.net_connections(kind="inet"):
             if conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port:
                 return conn.pid
-    except (psutil.AccessDenied, OSError):
+    except psutil.AccessDenied, OSError:
         return None
     return None
 

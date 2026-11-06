@@ -247,7 +247,7 @@ def check_ticks(spec: ContractSpec, currency: str, prices: Iterable[tuple[str, f
 def parse_number(value: Any) -> float | None:
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not math.isfinite(number) or number == UNSET_DOUBLE:
         return None

@@ -20,7 +20,7 @@ async def port_is_open(host: str, port: int) -> bool:
         _, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=PROBE_TIMEOUT
         )
-    except (TimeoutError, OSError):
+    except TimeoutError, OSError:
         return False
     writer.close()
     await writer.wait_closed()

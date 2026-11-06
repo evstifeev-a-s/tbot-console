@@ -136,7 +136,7 @@ def _http_ok(port: int, path: str) -> bool:
     try:
         with DIRECT.open(f"http://127.0.0.1:{port}{path}", timeout=2) as response:
             return int(response.status) == 200
-    except (urllib.error.URLError, OSError, ValueError):
+    except urllib.error.URLError, OSError, ValueError:
         return False
 
 

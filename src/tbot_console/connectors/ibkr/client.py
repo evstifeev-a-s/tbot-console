@@ -207,7 +207,7 @@ def build_contract(instrument: IBKRInstrument) -> Contract:
 def _to_float(value: Any) -> float:
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0.0
 
 
@@ -226,7 +226,7 @@ def _finite(value: float | None) -> float | None:
 def _amount(value: Any) -> float | None:
     try:
         amount = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return amount if math.isfinite(amount) else None
 
@@ -349,7 +349,7 @@ def execution_from_fill(fill: Fill) -> IBKRExecution | None:
 def _order_price(value: Any) -> float | None:
     try:
         price = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if math.isnan(price) or price <= 0 or price >= UNSET_PRICE:
         return None
