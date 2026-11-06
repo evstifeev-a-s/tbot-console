@@ -87,16 +87,7 @@ def file_env(base: Path, unit: UnitManifest, *files: Path) -> tuple[dict[str, st
     env: dict[str, str] = {}
     dropped: set[str] = set()
     for path in files:
-        if not path.is_file():
-            continue
-        try:
-            values = dotenv_values(path)
-        except (OSError, ValueError) as e:
-            raise EnvPolicyError(
-                f"{paths.relative(base, path)}: файл с ключами не читается ({e}). Сохраните его "
-                "в UTF-8 и проверьте права доступа: пока он не читается, процесс не запускается"
-            ) from e
-        for key, value in values.items():
+        for key, value in _env_values(base, path).items():
             if value is None:
                 continue
             name = key.upper()
@@ -105,6 +96,18 @@ def file_env(base: Path, unit: UnitManifest, *files: Path) -> tuple[dict[str, st
             elif only is None or only.admits(key):
                 env[key] = value
     return env, sorted(dropped)
+
+
+def _env_values(base: Path, path: Path) -> dict[str, str | None]:
+    if not path.is_file():
+        return {}
+    try:
+        return dotenv_values(path)
+    except (OSError, ValueError) as e:
+        raise EnvPolicyError(
+            f"{paths.relative(base, path)}: файл с ключами не читается ({e}). Сохраните его "
+            "в UTF-8 и проверьте права доступа: пока он не читается, процесс не запускается"
+        ) from e
 
 
 def child_env(base: Path, unit: UnitManifest, proc: str) -> tuple[dict[str, str], list[str]]:
