@@ -86,6 +86,75 @@ class OrderWatch:
     callback: OrderCallback
 
 
+def _ticked(price: float, spec: ContractSpec, currency: str) -> float:
+    return snap(price, price_step(price, spec.min_tick, currency))
+
+
+def _check_fields(
+    order: Order, price: float | None, stop: float | None, shares: int | None
+) -> None:
+    kind = order.orderType.upper()
+    if price is None and stop is None and shares is None:
+        raise OrderCheckError("modify needs a new price, stop or shares")
+    if price is not None and "LMT" not in kind:
+        raise OrderCheckError(f"order {order.orderId} is {kind} and has no limit price")
+    if stop is not None and kind not in STOP_ORDER_TYPES:
+        raise OrderCheckError(f"order {order.orderId} is {kind} and has no stop price")
+
+
+def _asked_change(
+    order: Order, price: float | None, stop: float | None, shares: int | None
+) -> tuple[float | None, float | None, int]:
+    _check_fields(order, price, stop, shares)
+    return (
+        None if price is None else checked_price("price", price),
+        None if stop is None else checked_price("stop", stop),
+        int(_to_float(order.totalQuantity)) if shares is None else checked_shares("shares", shares),
+    )
+
+
+def _check_stop_limit(order: Order, limit: float | None, stop: float | None) -> None:
+    if order.orderType.upper() != "STP LMT" or limit is None or stop is None:
+        return
+    better = limit > stop if order.action.upper() == "SELL" else limit < stop
+    if better:
+        raise OrderCheckError(
+            f"the limit {limit:g} of stop order {order.orderId} would be better than "
+            f"its stop {stop:g}: a stop-limit must not be"
+        )
+
+
+def _applied(order: Order, price: float | None, stop: float | None, count: int) -> Order:
+    changed = copy.copy(order)
+    if price is not None:
+        changed.lmtPrice = price
+    if stop is not None:
+        changed.auxPrice = stop
+    changed.totalQuantity = count
+    changed.transmit = True
+    return changed
+
+
+def _last_error(trade: Trade) -> tuple[int | None, str]:
+    last = trade.log[-1] if trade.log else None
+    if last is None or not last.errorCode:
+        return None, ""
+    return last.errorCode, last.message
+
+
+def _refusal_in_log(trade: Trade) -> tuple[int, str] | None:
+    code, message = _last_error(trade)
+    if code is None or is_notice(code):
+        return None
+    return code, message
+
+
+def _undo_local_cancel(trade: Trade, before: str, refusal: tuple[int, str] | None) -> None:
+    guessed = trade.orderStatus.status in (OrderStatus.Cancelled, OrderStatus.ApiCancelled)
+    if refusal is not None and refusal[0] != CANCELLED_CODE and guessed:
+        trade.orderStatus.status = before
+
+
 class IBKRTrader:
     def __init__(
         self,
@@ -437,7 +506,7 @@ class IBKRTrader:
                 "LMT",
                 ib_action(direction),
                 count,
-                price=snap(price, price_step(price, spec.min_tick, instrument.currency)),
+                price=_ticked(price, spec, instrument.currency),
                 transmit=True,
                 tif=horizon,
                 outside_rth=outside_rth,
@@ -524,7 +593,7 @@ class IBKRTrader:
         account: str,
     ) -> list[Order]:
         def tick(price: float) -> float:
-            return snap(price, price_step(price, spec.min_tick, currency))
+            return _ticked(price, spec, currency)
 
         action = ib_action(plan.side)
         reverse = "SELL" if action == "BUY" else "BUY"
@@ -604,76 +673,79 @@ class IBKRTrader:
         self, trade: Trade, price: float | None, stop: float | None, shares: int | None
     ) -> Order:
         order = trade.order
-        kind = order.orderType.upper()
-        if price is None and stop is None and shares is None:
-            raise OrderCheckError("modify needs a new price, stop or shares")
-        if price is not None and "LMT" not in kind:
-            raise OrderCheckError(f"order {order.orderId} is {kind} and has no limit price")
-        if stop is not None and kind not in STOP_ORDER_TYPES:
-            raise OrderCheckError(f"order {order.orderId} is {kind} and has no stop price")
-        new_limit = _order_price(order.lmtPrice) if price is None else checked_price("price", price)
-        new_stop = _order_price(order.auxPrice) if stop is None else checked_price("stop", stop)
-        count = (
-            int(_to_float(order.totalQuantity))
-            if shares is None
-            else checked_shares("shares", shares)
-        )
+        new_price, new_stop, count = _asked_change(order, price, stop, shares)
         filled = trade.orderStatus.filled
         if count <= filled:
             raise OrderCheckError(
                 f"order {order.orderId} has {filled:g} shares filled already: a new size must "
                 f"be above that, got {count}"
             )
-        instrument = instrument_from_contract(trade.contract)
-        if instrument is not None:
-            spec = await self._client.qualify(instrument)
-            check_ticks(
-                spec,
-                instrument.currency,
-                [
-                    (name, value)
-                    for name, value in (("price", price), ("stop", stop))
-                    if value is not None
-                ],
+        new_price, new_stop = await self._on_step(trade.contract, new_price, new_stop)
+        self._check_changed(trade, new_price, new_stop, count, resized=shares is not None)
+        return _applied(order, new_price, new_stop, count)
+
+    async def _on_step(
+        self, contract: Contract, price: float | None, stop: float | None
+    ) -> tuple[float | None, float | None]:
+        instrument = instrument_from_contract(contract)
+        if instrument is None:
+            return price, stop
+        spec = await self._client.qualify(instrument)
+        currency = instrument.currency
+        check_ticks(
+            spec,
+            currency,
+            [
+                (name, value)
+                for name, value in (("price", price), ("stop", stop))
+                if value is not None
+            ],
+        )
+        return (
+            None if price is None else _ticked(price, spec, currency),
+            None if stop is None else _ticked(stop, spec, currency),
+        )
+
+    def _check_changed(
+        self, trade: Trade, price: float | None, stop: float | None, count: int, *, resized: bool
+    ) -> None:
+        order = trade.order
+        limit = _order_price(order.lmtPrice) if price is None else price
+        trigger = _order_price(order.auxPrice) if stop is None else stop
+        _check_stop_limit(order, limit, trigger)
+        if not order.parentId and limit is not None:
+            check_value(count, limit, self._max_value)
+        if order.parentId and resized:
+            self._check_cover(trade, count)
+
+    def _check_cover(self, trade: Trade, count: int) -> None:
+        order = trade.order
+        parent = self._own_trade(order.parentId)
+        ceiling = _to_float((parent or trade).order.totalQuantity)
+        if count > ceiling:
+            raise OrderCheckError(
+                f"order {order.orderId} is the {role_of(order)} of entry {order.parentId}: "
+                f"it may cover at most {ceiling:g} shares, got {count}"
             )
-            if price is not None and new_limit is not None:
-                new_limit = snap(
-                    new_limit, price_step(new_limit, spec.min_tick, instrument.currency)
-                )
-            if stop is not None and new_stop is not None:
-                new_stop = snap(new_stop, price_step(new_stop, spec.min_tick, instrument.currency))
-        if kind == "STP LMT" and new_limit is not None and new_stop is not None:
-            selling = order.action.upper() == "SELL"
-            if (selling and new_limit > new_stop) or (not selling and new_limit < new_stop):
-                raise OrderCheckError(
-                    f"the limit {new_limit:g} of stop order {order.orderId} would be better than "
-                    f"its stop {new_stop:g}: a stop-limit must not be"
-                )
-        if not order.parentId and new_limit is not None:
-            check_value(count, new_limit, self._max_value)
-        if order.parentId and shares is not None:
-            parent = self._own_trade(order.parentId)
-            ceiling = _to_float((parent or trade).order.totalQuantity)
-            if count > ceiling:
-                raise OrderCheckError(
-                    f"order {order.orderId} is the {role_of(order)} of entry {order.parentId}: "
-                    f"it may cover at most {ceiling:g} shares, got {count}"
-                )
-        changed = copy.copy(order)
-        if price is not None:
-            changed.lmtPrice = new_limit
-        if stop is not None:
-            changed.auxPrice = new_stop
-        changed.totalQuantity = count
-        changed.transmit = True
-        return changed
 
     async def _send_change(self, trade: Trade, changed: Order) -> tuple[int, str] | None:
+        order_id = trade.order.orderId
+        before = trade.orderStatus.status
+        try:
+            answer = await self._answer_to(trade, changed)
+        except TimeoutError:
+            LOG.warning("IBKR has not answered the change of order %s yet", order_id)
+            self._safe_write("unconfirmed", ref=trade.order.orderRef, order_ids=[order_id])
+            return None
+        refusal = answer or _refusal_in_log(trade)
+        _undo_local_cancel(trade, before, refusal)
+        return refusal
+
+    async def _answer_to(self, trade: Trade, changed: Order) -> tuple[int, str] | None:
         answered: asyncio.Future[tuple[int, str] | None] = (
             asyncio.get_running_loop().create_future()
         )
         order_id = trade.order.orderId
-        before = trade.orderStatus.status
 
         def on_status(updated: Trade) -> None:
             if updated is trade and not answered.done():
@@ -688,23 +760,11 @@ class IBKRTrader:
         self._changing.add(order_id)
         try:
             self._ib.placeOrder(trade.contract, changed)
-            outcome = await asyncio.wait_for(asyncio.shield(answered), self._config.timeout or None)
-        except TimeoutError:
-            LOG.warning("IBKR has not answered the change of order %s yet", order_id)
-            self._safe_write("unconfirmed", ref=trade.order.orderRef, order_ids=[order_id])
-            return None
+            return await asyncio.wait_for(asyncio.shield(answered), self._config.timeout or None)
         finally:
             self._ib.orderStatusEvent -= on_status
             self._ib.errorEvent -= on_error
             self._changing.discard(order_id)
-        if outcome is None:
-            last = trade.log[-1] if trade.log else None
-            if last is not None and last.errorCode and not is_notice(last.errorCode):
-                outcome = last.errorCode, last.message
-        guessed = trade.orderStatus.status in (OrderStatus.Cancelled, OrderStatus.ApiCancelled)
-        if outcome is not None and outcome[0] != CANCELLED_CODE and guessed:
-            trade.orderStatus.status = before
-        return outcome
 
     async def cancel(self, order_id: int) -> None:
         self._require_ready()
@@ -803,7 +863,7 @@ class IBKRTrader:
         order = LimitOrder(
             ib_action(direction),
             count,
-            snap(price, price_step(price, spec.min_tick, instrument.currency)),
+            _ticked(price, spec, instrument.currency),
             account=account,
             tif=horizon,
             outsideRth=outside_rth,
