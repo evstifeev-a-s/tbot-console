@@ -5,6 +5,7 @@ import signal
 import socket
 import subprocess
 import sys
+from collections.abc import Callable
 from importlib.metadata import EntryPoint, distributions, entry_points
 from operator import attrgetter
 from pathlib import Path
@@ -350,29 +351,30 @@ def find_instances(base: Path, spec: ProcessSpec, exclude: set[int] | None = Non
     root = base.resolve()
     skipped = {os.getpid(), *(exclude or set())}
     scripts = console_scripts(spec.module, root)
-    found: list[int] = []
-    for process in psutil.process_iter():
-        if process.pid in skipped:
-            continue
-        try:
-            argv = process.cmdline()
-        except UNREADABLE:
-            continue
-        if not argv or "--check" in argv:
-            continue
-        if not Path(argv[0]).name.startswith("python"):
-            continue
-        if not runs_module(argv, spec.module, scripts):
-            continue
-        try:
-            cwd = process.cwd()
-        except UNREADABLE:
-            continue
-        if not cwd or not in_repo(Path(cwd).resolve(), root):
-            continue
-        if _env_compatible(process, spec.env):
-            found.append(process.pid)
-    return sorted(found)
+    return sorted(
+        process.pid
+        for process in psutil.process_iter()
+        if process.pid not in skipped and _is_instance(process, spec, root, scripts)
+    )
+
+
+def _is_instance(process: psutil.Process, spec: ProcessSpec, root: Path, scripts: set[str]) -> bool:
+    argv = _readable(process.cmdline)
+    if not argv or "--check" in argv or not Path(argv[0]).name.startswith("python"):
+        return False
+    if not runs_module(argv, spec.module, scripts):
+        return False
+    cwd = _readable(process.cwd)
+    if not cwd:
+        return False
+    return in_repo(Path(cwd).resolve(), root) and _env_compatible(process, spec.env)
+
+
+def _readable[T](read: Callable[[], T]) -> T | None:
+    try:
+        return read()
+    except UNREADABLE:
+        return None
 
 
 def port_holder(port: int) -> int | None:
