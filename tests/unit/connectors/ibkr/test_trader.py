@@ -26,12 +26,15 @@ from tbot_console.connectors.ibkr.models import (
     Target,
 )
 from tbot_console.connectors.ibkr.orders import (
+    BracketPlan,
     LiveAccountError,
     OrderCheckError,
     OrderRejectedError,
+    Portion,
     account_kind,
     mask_account,
     parse_number,
+    plan_bracket,
     price_step,
 )
 from tbot_console.connectors.ibkr.trader import IBKRTrader
@@ -375,6 +378,27 @@ class TestChecksBeforeSending:
             await trader.place_bracket(DEMO, "sell", 10, 2.5, 2.7, [(2.6, 10)], ref="s")
         with pytest.raises(OrderCheckError, match="at or above the stop"):
             await trader.place_bracket(DEMO, "sell", 10, 2.5, 2.7, stop_limit=2.65, ref="s")
+
+    async def test_the_sides_are_strict_but_a_stop_limit_may_equal_its_stop(
+        self, trader: IBKRTrader
+    ):
+        for side, stop, targets, message in [
+            ("buy", 2.5, [], "a buy's stop must be below its entry: stop 2.5, entry 2.5"),
+            ("sell", 2.5, [], "a sell's stop must be above its entry: stop 2.5, entry 2.5"),
+            ("buy", 2.3, [(2.8, 5), (2.5, 5)], "above its entry: target 2 2.5, entry 2.5"),
+            ("sell", 2.7, [(2.2, 5), (2.5, 5)], "below its entry: target 2 2.5, entry 2.5"),
+        ]:
+            with pytest.raises(OrderCheckError, match=message):
+                await trader.place_bracket(DEMO, side, 10, 2.5, stop, targets, ref="edge")
+        long = await trader.place_bracket(DEMO, "buy", 10, 2.5, 2.3, stop_limit=2.3, ref="l")
+        short = await trader.place_bracket(DEMO, "sell", 10, 2.5, 2.7, stop_limit=2.7, ref="s")
+        assert (long.legs[-1].limit_price, short.legs[-1].limit_price) == (2.3, 2.7)
+
+    def test_a_plan_is_for_regular_hours_unless_told_otherwise(self):
+        plan = plan_bracket("buy", 10, 2.5, 2.3, [], max_order_value=100)
+        assert plan == BracketPlan("buy", 10, 2.5, 2.3, None, (Portion(10, None),))
+        with pytest.raises(OrderCheckError, match="does not trigger a market stop"):
+            plan_bracket("buy", 10, 2.5, 2.3, [], outside_rth=True, max_order_value=100)
 
     async def test_only_stocks_are_traded(self, trader: IBKRTrader, ib: FakeIB):
         with pytest.raises(OrderCheckError, match="stock orders \\(STK\\) only; OPT"):
