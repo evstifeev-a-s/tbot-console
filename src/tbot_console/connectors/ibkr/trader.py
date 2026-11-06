@@ -10,7 +10,6 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from types import TracebackType
 from typing import Any, Literal
 
 from ib_async import IB, Contract, Fill, LimitOrder, Order, StopLimitOrder, StopOrder, Trade
@@ -21,6 +20,7 @@ from tbot_console.connectors.ibkr.client import (
     STOP_ORDER_TYPES,
     IBKRClient,
     _order_price,
+    _Session,
     _to_float,
     instrument_from_contract,
     is_notice,
@@ -169,7 +169,7 @@ def _undo_local_cancel(trade: Trade, before: str, refusal: tuple[int, str] | Non
         trade.orderStatus.status = before
 
 
-class IBKRTrader:
+class IBKRTrader(_Session):
     def __init__(
         self,
         config: IBKRConfig,
@@ -196,7 +196,6 @@ class IBKRTrader:
         self._account: str | None = None
         self._kind: AccountKind | None = None
         self._watchers: list[OrderWatch] = []
-        self._hooked = False
         self._send_lock = asyncio.Lock()
         self._accepted: set[int] = set()
         self._finished: set[int] = set()
@@ -277,18 +276,6 @@ class IBKRTrader:
         await self._client.disconnect()
         self._forget_account()
 
-    async def __aenter__(self) -> IBKRTrader:
-        await self.connect()
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        await self.disconnect()
-
     def _checked_account(self) -> tuple[str, AccountKind]:
         accounts = [name for name in self._ib.managedAccounts() if name]
         if not accounts:
@@ -307,13 +294,13 @@ class IBKRTrader:
         return _chosen_account(accounts, self._config.account, masked), kind
 
     def _hook(self) -> None:
-        if self._hooked:
-            return
-        self._ib.orderStatusEvent += self._on_status
-        self._ib.execDetailsEvent += self._on_fill
-        self._ib.errorEvent += self._on_error
-        self._ib.disconnectedEvent += self._on_disconnected
-        self._hooked = True
+        self._client._hook(
+            "orders",
+            (self._ib.orderStatusEvent, self._on_status),
+            (self._ib.execDetailsEvent, self._on_fill),
+            (self._ib.errorEvent, self._on_error),
+            (self._ib.disconnectedEvent, self._on_disconnected),
+        )
 
     def _forget_account(self) -> None:
         self._account = None

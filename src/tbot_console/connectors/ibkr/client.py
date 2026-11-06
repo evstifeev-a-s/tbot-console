@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from types import TracebackType
-from typing import Any, Literal, TypeVar, overload
+from typing import Any, Literal, Self, TypeVar, overload
 
 from ib_async import (
     IB,
@@ -232,9 +232,8 @@ def _amount(value: Any) -> float | None:
 
 
 def _size(value: float | None) -> float:
-    if value is None or math.isnan(value) or value < 0:
-        return 0.0
-    return float(value)
+    size = _price(value)
+    return 0.0 if size is None else size
 
 
 def bar_timestamp(value: date | datetime) -> float:
@@ -517,7 +516,27 @@ class ScanWatch:
     handler: Callable[[ScanDataList], None]
 
 
-class IBKRClient:
+class _Session:
+    async def connect(self) -> None:
+        raise NotImplementedError
+
+    async def disconnect(self) -> None:
+        raise NotImplementedError
+
+    async def __aenter__(self) -> Self:
+        await self.connect()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.disconnect()
+
+
+class IBKRClient(_Session):
     def __init__(self, config: IBKRConfig | None = None, ib: IB | None = None) -> None:
         self._config = config or IBKRConfig()
         self._ib = ib if ib is not None else IB()
@@ -527,7 +546,7 @@ class IBKRClient:
         self._watches: list[ScanWatch] = []
         self._streams: list[StreamWatch] = []
         self._stream_by_request: dict[int, StreamWatch] = {}
-        self._streams_hooked = False
+        self._hooked: set[str] = set()
         self._callback_tasks: set[asyncio.Task[Any]] = set()
         self._keyed: dict[str, asyncio.Lock] = {}
 
@@ -577,18 +596,6 @@ class IBKRClient:
             self._ib.disconnect()
         self._specs.clear()
         self._contracts.clear()
-
-    async def __aenter__(self) -> IBKRClient:
-        await self.connect()
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        await self.disconnect()
 
     @contextlib.contextmanager
     def _errors(self) -> Iterator[RequestErrors]:
@@ -969,12 +976,19 @@ class IBKRClient:
                 "quote boosters"
             )
 
-    def _hook_streams(self) -> None:
-        if self._streams_hooked:
+    def _hook(self, group: str, *listeners: tuple[Any, Callable[..., Any]]) -> None:
+        if group in self._hooked:
             return
-        self._ib.errorEvent += self._on_stream_error
-        self._ib.disconnectedEvent += self._on_connection_lost
-        self._streams_hooked = True
+        for event, handler in listeners:
+            event.connect(handler)
+        self._hooked.add(group)
+
+    def _hook_streams(self) -> None:
+        self._hook(
+            "streams",
+            (self._ib.errorEvent, self._on_stream_error),
+            (self._ib.disconnectedEvent, self._on_connection_lost),
+        )
 
     def _request_id(self, ticker: Ticker, family: str) -> int:
         return int(self._ib.wrapper.ticker2ReqId[family].get(ticker, 0))
