@@ -164,6 +164,45 @@ class BracketPlan:
         return named
 
 
+def _check_stop_side(buying: bool, entry: float, stop: float) -> None:
+    if buying and not stop < entry:
+        raise OrderCheckError(
+            f"a buy's stop must be below its entry: stop {stop:g}, entry {entry:g}"
+        )
+    if not buying and not stop > entry:
+        raise OrderCheckError(
+            f"a sell's stop must be above its entry: stop {stop:g}, entry {entry:g}"
+        )
+
+
+def _check_target_sides(buying: bool, entry: float, legs: Sequence[tuple[float, int]]) -> None:
+    for index, (price, _) in enumerate(legs, 1):
+        if buying and not price > entry:
+            raise OrderCheckError(
+                f"a buy's target must be above its entry: target {index} {price:g}, entry {entry:g}"
+            )
+        if not buying and not price < entry:
+            raise OrderCheckError(
+                f"a sell's target must be below its entry: target {index} {price:g}, "
+                f"entry {entry:g}"
+            )
+
+
+def _check_stop_limit_side(buying: bool, stop: float, limit: float | None) -> None:
+    if limit is None:
+        return
+    if buying and limit > stop:
+        raise OrderCheckError(
+            f"stop_limit is the worst price the stop may sell at, so for a buy it must be at "
+            f"or below the stop: stop_limit {limit:g}, stop {stop:g}"
+        )
+    if not buying and limit < stop:
+        raise OrderCheckError(
+            f"stop_limit is the worst price the stop may buy back at, so for a sell it must be "
+            f"at or above the stop: stop_limit {limit:g}, stop {stop:g}"
+        )
+
+
 def plan_bracket(
     side: object,
     shares: object,
@@ -193,35 +232,9 @@ def plan_bracket(
             f"the targets add up to {aimed} shares, more than the {total} of the entry"
         )
     buying = direction == "buy"
-    if buying and not stop_price < entry_price:
-        raise OrderCheckError(
-            f"a buy's stop must be below its entry: stop {stop_price:g}, entry {entry_price:g}"
-        )
-    if not buying and not stop_price > entry_price:
-        raise OrderCheckError(
-            f"a sell's stop must be above its entry: stop {stop_price:g}, entry {entry_price:g}"
-        )
-    for index, (price, _) in enumerate(legs, 1):
-        if buying and not price > entry_price:
-            raise OrderCheckError(
-                f"a buy's target must be above its entry: target {index} {price:g}, "
-                f"entry {entry_price:g}"
-            )
-        if not buying and not price < entry_price:
-            raise OrderCheckError(
-                f"a sell's target must be below its entry: target {index} {price:g}, "
-                f"entry {entry_price:g}"
-            )
-    if limit is not None and buying and limit > stop_price:
-        raise OrderCheckError(
-            f"stop_limit is the worst price the stop may sell at, so for a buy it must be at "
-            f"or below the stop: stop_limit {limit:g}, stop {stop_price:g}"
-        )
-    if limit is not None and not buying and limit < stop_price:
-        raise OrderCheckError(
-            f"stop_limit is the worst price the stop may buy back at, so for a sell it must be "
-            f"at or above the stop: stop_limit {limit:g}, stop {stop_price:g}"
-        )
+    _check_stop_side(buying, entry_price, stop_price)
+    _check_target_sides(buying, entry_price, legs)
+    _check_stop_limit_side(buying, stop_price, limit)
     if outside_rth and limit is None:
         raise OrderCheckError(
             "outside regular hours IBKR does not trigger a market stop on a US stock: pass "
