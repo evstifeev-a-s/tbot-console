@@ -306,6 +306,22 @@ async def test_the_quotes_tape_delivers_bid_and_ask(client: IBKRClient, ib: Fake
     ]
 
 
+async def test_the_tape_keeps_prices_and_sizes_below_one(client: IBKRClient):
+    prints: list[TapePrint] = []
+    quotes: list[TapeQuote] = []
+    trades = await client.watch_tape(ROUTED, prints.append)
+    await client.watch_tape(ROUTED, quotes.append, kind="quotes")
+    push(
+        trades.ticker,
+        tape=[
+            trade_tick(0.5, 0.5),
+            TickByTickBidAsk(MOMENT, 0.25, 0.75, 0.5, 1.0, TickAttribBidAsk()),
+        ],
+    )
+    assert [(p.price, p.size) for p in prints] == [(0.5, 0.5)]
+    assert [(q.bid, q.ask, q.bid_size, q.ask_size) for q in quotes] == [(0.25, 0.75, 0.5, 1.0)]
+
+
 async def test_depth_and_tape_of_one_instrument_do_not_cross(client: IBKRClient):
     books: list[DepthBook] = []
     prints: list[TapePrint] = []
