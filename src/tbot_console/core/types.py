@@ -1,8 +1,3 @@
-"""Universal types for the trading system.
-
-This module defines core types used across all exchanges and components.
-"""
-
 from enum import StrEnum
 from warnings import deprecated
 
@@ -23,23 +18,12 @@ class ConnectionType(StrEnum):
 
 
 class ServerType(StrEnum):
-    """Server environment types.
-
-    Used to distinguish between test/sandbox and production environments.
-    """
-
     TEST = "test"
     PRODUCTION = "production"
 
 
 @deprecated("CallbackType is not used by the platform and goes away in tbot-console 2.0.0")
 class CallbackType(StrEnum):
-    """Types of data callbacks.
-
-    Defines the different types of data that can be received from exchanges
-    and trigger registered callbacks.
-    """
-
     TRADE = "trade"
     ORDERBOOK = "orderbook"
     TICKER = "ticker"

@@ -1,18 +1,16 @@
-"""Custom exceptions for the trading system."""
-
 from warnings import deprecated
 
 
 class TradingSystemError(Exception):
-    """Base exception for trading system."""
+    pass
 
 
 class ExchangeError(TradingSystemError):
-    """Base exception for exchange-related errors."""
+    pass
 
 
 class ExchangeConnectionError(ExchangeError):
-    """Exchange connection error."""
+    pass
 
 
 class ExchangeRequestError(ExchangeConnectionError):
@@ -31,15 +29,15 @@ class ExchangeLockError(ExchangeConnectionError):
 
 @deprecated("ExchangeAuthError is never raised by the platform and goes away in tbot-console 2.0.0")
 class ExchangeAuthError(ExchangeError):
-    """Exchange authentication error."""
+    pass
 
 
 class ConfigurationError(TradingSystemError):
-    """Configuration error."""
+    pass
 
 
 class StreamingError(TradingSystemError):
-    """Base exception for streaming-related errors."""
+    pass
 
 
 @deprecated(
@@ -51,26 +49,26 @@ class MissingSequenceNumber(StreamingError):
 
 @deprecated("SubscriptionError is never raised by the platform and goes away in tbot-console 2.0.0")
 class SubscriptionError(StreamingError):
-    """Exception raised when subscription to a channel fails."""
+    pass
 
 
 @deprecated(
     "AuthenticationError is never raised by the platform and goes away in tbot-console 2.0.0"
 )
 class AuthenticationError(StreamingError):
-    """Exception raised when authentication fails."""
+    pass
 
 
 @deprecated("CallbackError is never raised by the platform and goes away in tbot-console 2.0.0")
 class CallbackError(StreamingError):
-    """Exception raised when a callback function encounters an error."""
+    pass
 
 
 @deprecated(
     "ConnectionTimeoutError is never raised by the platform and goes away in tbot-console 2.0.0"
 )
 class ConnectionTimeoutError(StreamingError):
-    """Exception raised when connection timeout is detected."""
+    pass
 
 
 deprecated("StreamingError is never raised by the platform and goes away in tbot-console 2.0.0")(
