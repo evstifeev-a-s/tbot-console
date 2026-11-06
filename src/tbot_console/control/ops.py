@@ -172,47 +172,53 @@ class Operation:
         try:
             with transition_lock(paths.lock_path(self.base, self.unit.id, self.proc)):
                 current = self._current()
-                if (
-                    self.action in ("start", "adopt")
-                    and self._alive(current)
-                    and pid in (None, current.get("pid"))
-                ):
+                if self._already_running(current, pid):
                     self.echo(f"{self.label}: уже работает (процесс {current.get('pid')})")
                     return EXIT_OK
-                self.record = {
-                    "op_id": self.op_id,
-                    "action": self.action,
-                    "phase": "checking",
-                    "started_at": time.time(),
-                    "error": None,
-                    "error_code": None,
-                    "finished_at": None,
-                }
-                write_json_atomic(self._op_file(), self.record)
-                try:
-                    message = self._dispatch(pid)
-                except procs.EnvPolicyError as e:
-                    return self._fail(OpFailedError(str(e), "env_policy"))
-                except OpFailedError as e:
-                    return self._fail(e)
-                except BaseException:
-                    self.record.update(
-                        error="операция прервана до конца — проверьте состояние процесса",
-                        error_code="interrupted",
-                        finished_at=time.time(),
-                    )
-                    self.phase("failed")
-                    raise
-                self.record.update(finished_at=time.time())
-                self.phase("done")
-                self.echo(f"{self.label}: {message}")
-                return EXIT_OK
+                return self._run(pid)
         except BusyError as e:
             self.echo(f"{self.label}: {e}")
             return EXIT_BUSY
         except procs.ControlUnsupportedError as e:
             self.echo(f"{self.label}: {e}")
             return EXIT_FAILED
+
+    def _already_running(self, current: dict[str, Any], pid: int | None) -> bool:
+        return (
+            self.action in ("start", "adopt")
+            and self._alive(current)
+            and pid in (None, current.get("pid"))
+        )
+
+    def _run(self, pid: int | None) -> int:
+        self.record = {
+            "op_id": self.op_id,
+            "action": self.action,
+            "phase": "checking",
+            "started_at": time.time(),
+            "error": None,
+            "error_code": None,
+            "finished_at": None,
+        }
+        write_json_atomic(self._op_file(), self.record)
+        try:
+            message = self._dispatch(pid)
+        except procs.EnvPolicyError as e:
+            return self._fail(OpFailedError(str(e), "env_policy"))
+        except OpFailedError as e:
+            return self._fail(e)
+        except BaseException:
+            self.record.update(
+                error="операция прервана до конца — проверьте состояние процесса",
+                error_code="interrupted",
+                finished_at=time.time(),
+            )
+            self.phase("failed")
+            raise
+        self.record.update(finished_at=time.time())
+        self.phase("done")
+        self.echo(f"{self.label}: {message}")
+        return EXIT_OK
 
     def _fail(self, error: OpFailedError) -> int:
         self.record.update(error=error.message, error_code=error.code, finished_at=time.time())
@@ -358,17 +364,30 @@ class Operation:
                     f"процесс завершился при запуске с кодом {code}. Последние строки вывода:\n{tail}",
                     "died_on_start",
                 )
-            if ready.kind == "alive" and time.time() - started_at >= ALIVE_GRACE_S:
-                return f"запущен, процесс {child.pid}"
-            if ready.kind == "http" and endpoint is not None and _http_ok(*endpoint):
-                return f"запущен и отвечает, процесс {child.pid}"
-            if ready.kind == "descriptor" and self._descriptor_pid(identity) == child.pid:
-                return f"запущен и работает, процесс {child.pid}"
+            confirmed = self._readiness(child.pid, identity, started_at, endpoint)
+            if confirmed is not None:
+                return confirmed
             if time.monotonic() >= deadline:
                 return (
                     f"процесс {child.pid} жив, но не подтвердил готовность за {ready.timeout_s} с"
                 )
             time.sleep(POLL_S)
+
+    def _readiness(
+        self,
+        pid: int,
+        identity: dict[str, Any],
+        started_at: float,
+        endpoint: tuple[int, str] | None,
+    ) -> str | None:
+        kind = self.spec.ready.kind
+        if kind == "alive" and time.time() - started_at >= ALIVE_GRACE_S:
+            return f"запущен, процесс {pid}"
+        if kind == "http" and endpoint is not None and _http_ok(*endpoint):
+            return f"запущен и отвечает, процесс {pid}"
+        if kind == "descriptor" and self._descriptor_pid(identity) == pid:
+            return f"запущен и работает, процесс {pid}"
+        return None
 
     def _foreign_message(self, pid: int) -> str:
         return (
@@ -392,34 +411,41 @@ class Operation:
         current = self._current()
         pid = current.get("pid")
         if not pid or not self._alive(current):
-            holder = foreign_pid(self.base, self.unit, self.proc, current)
-            if holder is not None:
-                raise OpFailedError(self._foreign_message(holder), "foreign")
-            if pid:
-                self._mark_stopped()
-            return "уже остановлен"
+            return self._already_stopped(current, pid)
         pid = int(pid)
         self.phase("stopping")
         self.echo(f"{self.label}: прошу процесс {pid} завершиться (SIGTERM)")
         procs.terminate(pid)
-        deadline = time.monotonic() + self.spec.stop_timeout_s
-        while self._alive(current) and time.monotonic() < deadline:
-            time.sleep(POLL_S)
+        self._wait_gone(current, self.spec.stop_timeout_s)
         if self._alive(current):
-            if self.unit.trades(self.proc):
-                raise OpFailedError(
-                    f"процесс {pid} не остановился за {self.spec.stop_timeout_s} с. Разбираться "
-                    "руками: kill -9 оборвёт процесс без сохранения состояния, а открытые позиции "
-                    "останутся без присмотра",
-                    "stop_timeout",
-                )
-            self.echo(f"{self.label}: не остановился вовремя — завершаю принудительно")
-            procs.kill(pid)
-            forced = time.monotonic() + KILL_WAIT_S
-            while self._alive(current) and time.monotonic() < forced:
-                time.sleep(POLL_S)
+            self._force_stop(current, pid)
         self._mark_stopped()
         return f"остановлен (процесс {pid})"
+
+    def _already_stopped(self, current: dict[str, Any], pid: Any) -> str:
+        holder = foreign_pid(self.base, self.unit, self.proc, current)
+        if holder is not None:
+            raise OpFailedError(self._foreign_message(holder), "foreign")
+        if pid:
+            self._mark_stopped()
+        return "уже остановлен"
+
+    def _wait_gone(self, current: dict[str, Any], seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while self._alive(current) and time.monotonic() < deadline:
+            time.sleep(POLL_S)
+
+    def _force_stop(self, current: dict[str, Any], pid: int) -> None:
+        if self.unit.trades(self.proc):
+            raise OpFailedError(
+                f"процесс {pid} не остановился за {self.spec.stop_timeout_s} с. Разбираться "
+                "руками: kill -9 оборвёт процесс без сохранения состояния, а открытые позиции "
+                "останутся без присмотра",
+                "stop_timeout",
+            )
+        self.echo(f"{self.label}: не остановился вовремя — завершаю принудительно")
+        procs.kill(pid)
+        self._wait_gone(current, KILL_WAIT_S)
 
     def _restart(self) -> str:
         current = self._current()
@@ -439,38 +465,8 @@ class Operation:
                 f"уже под присмотром консоли (процесс {current.get('pid')})", "already_running"
             )
         identity = self._check(before="приёмом", strict=False).identity if self.spec.check else {}
-        candidate = pid
-        if candidate is None:
-            holder = identity.get("lock_holder")
-            if holder == 0:
-                raise OpFailedError(self._unknown_holder(identity), "lock_held")
-            candidate = int(holder) if holder else None
-        if candidate is None:
-            found = instances(self.base, self.unit, self.proc)
-            if len(found) > 1:
-                raise OpFailedError(
-                    "подходят несколько процессов: "
-                    + ", ".join(map(str, found))
-                    + f" — укажите нужный: `uv run tbot adopt {self.label} --pid N`",
-                    "ambiguous",
-                )
-            candidate = found[0] if found else None
-        if candidate is None:
-            raise OpFailedError("не нашёл работающий процесс, который можно принять", "not_found")
-        argv = procs.cmdline(candidate)
-        if not procs.runs_module(argv, self.spec.module, base=self.base):
-            raise OpFailedError(
-                f"процесс {candidate} запускает не {self.spec.module}: {' '.join(argv)}",
-                "mismatch",
-            )
-        cwd = procs.cwd_of(candidate)
-        if not procs.in_repo(cwd, self.base):
-            raise OpFailedError(f"процесс {candidate} работает из другой папки: {cwd}", "mismatch")
-        named = self._descriptor_pid(identity)
-        if named is not None and named != candidate:
-            raise OpFailedError(
-                f"дескриптор бота называет процесс {named}, а не {candidate}", "mismatch"
-            )
+        candidate = self._adoption_candidate(pid, identity)
+        self._verify_adoptable(candidate, identity)
         stdout = procs.stdout_path(candidate)
         output = (
             paths.relative(self.base, stdout)
@@ -486,3 +482,39 @@ class Operation:
             live_trading=procs.env_flag(candidate, live.LIVE_TRADING_ENV),
         )
         return f"принят под присмотр, процесс {candidate}"
+
+    def _adoption_candidate(self, pid: int | None, identity: dict[str, Any]) -> int:
+        if pid is not None:
+            return pid
+        holder = identity.get("lock_holder")
+        if holder == 0:
+            raise OpFailedError(self._unknown_holder(identity), "lock_held")
+        if holder:
+            return int(holder)
+        found = instances(self.base, self.unit, self.proc)
+        if len(found) > 1:
+            raise OpFailedError(
+                "подходят несколько процессов: "
+                + ", ".join(map(str, found))
+                + f" — укажите нужный: `uv run tbot adopt {self.label} --pid N`",
+                "ambiguous",
+            )
+        if not found:
+            raise OpFailedError("не нашёл работающий процесс, который можно принять", "not_found")
+        return found[0]
+
+    def _verify_adoptable(self, candidate: int, identity: dict[str, Any]) -> None:
+        argv = procs.cmdline(candidate)
+        if not procs.runs_module(argv, self.spec.module, base=self.base):
+            raise OpFailedError(
+                f"процесс {candidate} запускает не {self.spec.module}: {' '.join(argv)}",
+                "mismatch",
+            )
+        cwd = procs.cwd_of(candidate)
+        if not procs.in_repo(cwd, self.base):
+            raise OpFailedError(f"процесс {candidate} работает из другой папки: {cwd}", "mismatch")
+        named = self._descriptor_pid(identity)
+        if named is not None and named != candidate:
+            raise OpFailedError(
+                f"дескриптор бота называет процесс {named}, а не {candidate}", "mismatch"
+            )
