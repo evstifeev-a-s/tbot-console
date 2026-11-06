@@ -5,6 +5,7 @@ import os
 import sys
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -136,77 +137,114 @@ def _op_summary(op: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _Seen:
+    record: dict[str, Any]
+    op: dict[str, Any]
+    alive: bool
+
+    @property
+    def pid(self) -> Any:
+        return self.record.get("pid")
+
+    @property
+    def phase(self) -> str:
+        return str(self.op.get("phase")) if self.op else ""
+
+    @property
+    def pending(self) -> bool:
+        return bool(self.op) and self.phase not in TERMINAL_PHASES
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.op) and self.phase == "failed"
+
+    @property
+    def stuck(self) -> bool:
+        return self.failed and self.op.get("error_code") == "stop_timeout"
+
+    @property
+    def action(self) -> Any:
+        return self.op.get("action")
+
+
 def process_view(base: Path, unit: UnitManifest, proc: str) -> dict[str, Any]:
-    spec = unit.processes[proc]
-    record = read_object(paths.state_path(base, unit.id, proc))
-    op = read_object(paths.op_path(base, unit.id, proc))
-    output = output_file(base, unit, proc, record or {})
-    view: dict[str, Any] = {
+    record = read_object(paths.state_path(base, unit.id, proc)) or {}
+    op = read_object(paths.op_path(base, unit.id, proc)) or {}
+    view = _fresh_view(base, unit, proc, record, op)
+    alive = procs.owned(
+        base, record.get("pid"), record.get("create_time"), record.get("start_mark")
+    )
+    seen = _Seen(record, op, alive)
+    view["live_trading"] = live_trading_view(unit, proc, record, alive)
+    busy = flock_held(paths.lock_path(base, unit.id, proc)) is True
+    if busy and seen.pending:
+        view.update(state=PHASE_STATES.get(seen.phase, "starting"), pid=seen.pid if alive else None)
+    elif alive:
+        _show_running(view, seen)
+    else:
+        _show_stopped(view, seen, foreign_pid(base, unit, proc, record))
+    return _finish(view)
+
+
+def _fresh_view(
+    base: Path, unit: UnitManifest, proc: str, record: dict[str, Any], op: dict[str, Any]
+) -> dict[str, Any]:
+    output = output_file(base, unit, proc, record)
+    return {
         "name": proc,
-        "title": spec.title,
+        "title": unit.processes[proc].title,
         "state": "stopped",
         "pid": None,
         "since": None,
-        "adopted": bool(record and record.get("adopted")),
+        "adopted": bool(record.get("adopted")),
         "can": [],
         "confirm": confirm_text(unit, proc),
         "op": _op_summary(op),
         "problem": None,
         "output": output.is_file(),
     }
-    pid = record.get("pid") if record else None
-    alive = procs.owned(
-        base,
-        pid,
-        record.get("create_time") if record else None,
-        record.get("start_mark") if record else None,
+
+
+def _show_running(view: dict[str, Any], seen: _Seen) -> None:
+    stuck = seen.stuck
+    view.update(
+        state="stuck" if stuck else "running",
+        pid=seen.pid,
+        since=seen.record.get("started_at"),
+        can=["stop"] if stuck else ["stop", "restart"],
     )
-    view["live_trading"] = live_trading_view(unit, proc, record, alive)
-    busy = flock_held(paths.lock_path(base, unit.id, proc)) is True
-    phase = str(op.get("phase")) if op else ""
-    if busy and op and phase not in TERMINAL_PHASES:
-        view["state"] = PHASE_STATES.get(phase, "starting")
-        view["pid"] = pid if alive else None
-        return _finish(view)
-    if alive:
-        stuck = bool(op and phase == "failed" and op.get("error_code") == "stop_timeout")
-        view.update(
-            state="stuck" if stuck else "running",
-            pid=pid,
-            since=record.get("started_at") if record else None,
-            can=["stop"] if stuck else ["stop", "restart"],
+    if seen.failed:
+        started = float(seen.record.get("started_at") or 0.0)
+        if stuck or float(seen.op.get("finished_at") or 0.0) >= started:
+            view["problem"] = seen.op.get("error")
+    elif seen.pending:
+        view["op"] = {**view["op"], "phase": "interrupted"}
+        view["problem"] = (
+            f"операция «{seen.action}» прервалась на шаге «{seen.phase}», но процесс работает"
         )
-        if op and phase == "failed":
-            started = float((record or {}).get("started_at") or 0.0)
-            if stuck or float(op.get("finished_at") or 0.0) >= started:
-                view["problem"] = op.get("error")
-        elif op and phase not in TERMINAL_PHASES:
-            view["op"] = {**(view["op"] or {}), "phase": "interrupted"}
-            view["problem"] = (
-                f"операция «{op.get('action')}» прервалась на шаге «{phase}», но процесс работает"
-            )
-        return _finish(view)
-    if op and phase not in TERMINAL_PHASES:
+
+
+def _show_stopped(view: dict[str, Any], seen: _Seen, foreign: int | None) -> None:
+    if seen.pending:
         view["state"] = "interrupted"
         view["problem"] = (
-            f"операция «{op.get('action')}» прервалась на шаге «{phase}»: процесс, который её "
+            f"операция «{seen.action}» прервалась на шаге «{seen.phase}»: процесс, который её "
             "выполнял, завершился. Проверьте состояние и повторите."
         )
-    elif pid:
+    elif seen.pid:
         view["state"] = "exited"
-        view["problem"] = f"процесс {pid} завершился сам — причина в выводе процесса"
-    foreign = foreign_pid(base, unit, proc, record)
+        view["problem"] = f"процесс {seen.pid} завершился сам — причина в выводе процесса"
     if foreign is not None:
         view.update(state="foreign", pid=foreign, can=["adopt"])
         view["problem"] = (
             f"процесс {foreign} работает, но консоль его не запускала — нажмите «Принять», "
             "чтобы управлять им отсюда"
         )
-        return _finish(view)
+        return
     view["can"] = ["start"]
-    if op and phase == "failed" and view["problem"] is None:
-        view["problem"] = op.get("error")
-    return _finish(view)
+    if seen.failed and view["problem"] is None:
+        view["problem"] = seen.op.get("error")
 
 
 def _finish(view: dict[str, Any]) -> dict[str, Any]:
