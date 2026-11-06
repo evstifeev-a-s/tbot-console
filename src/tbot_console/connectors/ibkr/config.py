@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from enum import Enum, IntEnum
+from enum import IntEnum, StrEnum
 
 from tbot_console.core.exceptions import ConfigurationError
 from tbot_console.core.types import ServerType
@@ -15,7 +15,7 @@ DEFAULT_STREAM_LIMIT = 3
 LIVE_TRADING_ENV = "IBKR_ALLOW_LIVE_TRADING"
 
 
-class Gateway(str, Enum):
+class Gateway(StrEnum):
     TWS = "tws"
     GATEWAY = "gateway"
 

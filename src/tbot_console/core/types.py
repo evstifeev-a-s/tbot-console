@@ -3,12 +3,12 @@
 This module defines core types used across all exchanges and components.
 """
 
-from enum import Enum
+from enum import StrEnum
 from warnings import deprecated
 
 
 @deprecated("ConnectionType is not used by the platform and goes away in tbot-console 2.0.0")
-class ConnectionType(str, Enum):
+class ConnectionType(StrEnum):
     """Types of connections in a pool.
 
     Universal across all exchanges. Each connection type serves a specific purpose:
@@ -22,7 +22,7 @@ class ConnectionType(str, Enum):
     USER_DATA = "user_data"
 
 
-class ServerType(str, Enum):
+class ServerType(StrEnum):
     """Server environment types.
 
     Used to distinguish between test/sandbox and production environments.
@@ -33,7 +33,7 @@ class ServerType(str, Enum):
 
 
 @deprecated("CallbackType is not used by the platform and goes away in tbot-console 2.0.0")
-class CallbackType(str, Enum):
+class CallbackType(StrEnum):
     """Types of data callbacks.
 
     Defines the different types of data that can be received from exchanges

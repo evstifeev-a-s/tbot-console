@@ -5,7 +5,7 @@ import math
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal
 
 from ib_async import Contract, Ticker
 from ib_async.objects import (
@@ -27,8 +27,6 @@ from tbot_console.connectors.ibkr.models import (
     TapeQuote,
 )
 from tbot_console.core.exceptions import ExchangeConnectionError, ExchangeRequestError
-
-T = TypeVar("T")
 
 TapeKind = Literal["trades", "quotes"]
 StreamCallback = Callable[[Any], Any]
@@ -214,7 +212,7 @@ def second_of(moment: float) -> int:
     return math.floor(moment)
 
 
-def fresh_ticks(
+def fresh_ticks[T](
     page: Sequence[T], stamp: Callable[[T], float], boundary: int, seen: int
 ) -> list[T]:
     skipped, fresh = 0, []

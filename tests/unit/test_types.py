@@ -2,6 +2,9 @@
 
 import pytest
 
+from tbot_console.analysis.models import Timeframe, TrendType
+from tbot_console.connectors.ibkr.config import Gateway
+from tbot_console.connectors.ibkr.instruments import SecType
 from tbot_console.core import exceptions
 from tbot_console.core.types import CallbackType, ConnectionType, ServerType
 
@@ -118,3 +121,13 @@ def test_the_hierarchy_the_connector_raises_is_not_deprecated():
         exceptions.ConfigurationError,
     ):
         assert not hasattr(kept, "__deprecated__")
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [ServerType, ConnectionType, CallbackType, Timeframe, TrendType, Gateway, SecType],
+    ids=lambda kind: kind.__name__,
+)
+def test_public_enums_print_as_their_value(kind: type):
+    for member in kind:
+        assert str(member) == f"{member}" == f"{member:>0}" == member.value

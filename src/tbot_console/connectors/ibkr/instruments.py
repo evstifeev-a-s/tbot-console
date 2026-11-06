@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class SecType(str, Enum):
+class SecType(StrEnum):
     STK = "STK"
     IND = "IND"
     CASH = "CASH"

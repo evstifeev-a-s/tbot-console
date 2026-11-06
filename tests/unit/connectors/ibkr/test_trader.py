@@ -85,6 +85,15 @@ def events_of(path: Path, event: str) -> list[dict[str, Any]]:
     return [record for record in read_journal(path) if record["event"] == event]
 
 
+def journal_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def tear_journal(path: Path) -> None:
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'{"event": "status", "at": 1.0}\n{"event": "sta')
+
+
 def by_id(ib: FakeIB, order_id: int) -> Trade:
     return ib.own_trades[order_id]
 
@@ -106,7 +115,7 @@ class TestAccountLock:
         assert ib.connect_kwargs["clientId"] == CLIENT_ID
         (connect,) = events_of(journal, "connect")
         assert connect["account"] == "DU****567" and connect["kind"] == "paper"
-        assert ACCOUNT not in journal.read_text(encoding="utf-8")
+        assert ACCOUNT not in journal_text(journal)
 
     async def test_a_live_account_without_the_switch_is_refused_and_disconnected(
         self, ib: FakeIB, journal: Path
@@ -734,13 +743,12 @@ class TestJournal:
         assert (fill["shares"], fill["price"], fill["ref"]) == (60, 2.5, "sig-1")
         assert all(isinstance(r["at"], float) for r in records)
         assert {r.get("account") for r in records if "account" in r} == {"DU****567"}
-        assert ACCOUNT not in journal.read_text(encoding="utf-8")
+        assert ACCOUNT not in journal_text(journal)
 
     async def test_a_torn_line_never_breaks_reading(
         self, ib: FakeIB, journal: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        journal.parent.mkdir(parents=True)
-        journal.write_bytes(b'{"event": "status", "at": 1.0}\n{"event": "sta')
+        tear_journal(journal)
         synced: list[int] = []
         real = os.fsync
 
