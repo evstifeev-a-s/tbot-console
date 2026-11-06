@@ -352,6 +352,14 @@ async def test_callbacks_may_be_async_and_a_failing_one_keeps_the_stream(
     assert "trades tape callback raised" in caplog.text
 
 
+async def test_streams_listen_to_ib_once_however_many_are_open(client: IBKRClient, ib: FakeIB):
+    await client.watch_depth(ROUTED, _ignore)
+    listeners = (len(ib.errorEvent), len(ib.disconnectedEvent))
+    await client.watch_tape(ROUTED, _ignore)
+    await client.watch_tape(OTHER, _ignore, kind="quotes")
+    assert (len(ib.errorEvent), len(ib.disconnectedEvent)) == listeners
+
+
 async def test_stop_cancels_the_stream_once(client: IBKRClient, ib: FakeIB):
     books: list[DepthBook] = []
     depth = await client.watch_depth(ROUTED, books.append)

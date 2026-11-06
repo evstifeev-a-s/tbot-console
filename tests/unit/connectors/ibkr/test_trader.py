@@ -1192,6 +1192,25 @@ class TestEdges:
             assert trader.max_order_value == 5_000 and trader.journal_path == journal
         assert not ib.connected and trader.account is None
 
+    async def test_an_error_inside_the_context_still_disconnects(self, ib: FakeIB, journal: Path):
+        with pytest.raises(RuntimeError, match="boom"):
+            async with build(ib, journal) as trader:
+                raise RuntimeError("boom")
+        assert not ib.connected and trader.account is None
+
+    async def test_a_reconnect_reports_each_status_once(
+        self, trader: IBKRTrader, ib: FakeIB, journal: Path
+    ):
+        events: list[OrderEvent] = []
+        trader.watch_orders(events.append)
+        await trader.disconnect()
+        await trader.connect()
+        placed = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="again")
+        ib.fail(by_id(ib, placed.order_id), 399, "Order Message: Warning: held", warning=True)
+        assert [(e.kind, e.code) for e in events] == [("accepted", None), ("notice", 399)]
+        statuses = [r for r in events_of(journal, "status") if r["order_id"] == placed.order_id]
+        assert [r["status"] for r in statuses] == ["Submitted", "ValidationError"]
+
     def test_ib_numbers_read_as_floats_or_none(self):
         assert parse_number("1250.5") == 1250.5
         assert parse_number(None) is None

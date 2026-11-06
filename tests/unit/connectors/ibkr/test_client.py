@@ -94,6 +94,12 @@ class TestConnect:
             assert opened.is_connected
         assert not ib.connected
 
+    async def test_an_error_inside_the_context_still_disconnects(self, ib: FakeIB):
+        with pytest.raises(RuntimeError, match="boom"):
+            async with IBKRClient(IBKRConfig(), ib=ib):
+                raise RuntimeError("boom")
+        assert not ib.connected
+
 
 class TestQualify:
     async def test_maps_contract_details(self, client: IBKRClient):
@@ -191,6 +197,15 @@ class TestQuotes:
         quote = await client.fetch_quote(AAPL)
         assert quote is not None
         assert (quote.bid_size, quote.ask_size) == (0.0, 0.0)
+
+    async def test_a_fractional_size_is_kept(self, client: IBKRClient, ib: FakeIB):
+        contract = make_contract("AAPL", 265598)
+        ib.details = [make_details(contract)]
+        ib.tickers = [make_ticker(contract, bidSize=0.5, askSize=0.0)]
+
+        quote = await client.fetch_quote(AAPL)
+        assert quote is not None
+        assert (quote.bid_size, quote.ask_size) == (0.5, 0.0)
 
     async def test_mid_falls_back_to_last_then_close(self, client: IBKRClient, ib: FakeIB):
         contract = make_contract("AAPL", 265598)
