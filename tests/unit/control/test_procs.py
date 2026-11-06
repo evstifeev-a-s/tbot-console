@@ -4,6 +4,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -205,10 +206,20 @@ class TestPortHolder:
 
 class TestLockHolder:
     def test_the_live_pid_in_the_lock_running_the_module_holds_it(self, tmp_path: Path):
-        lock = tmp_path / "unit.lock"
-        lock.write_text(f" {os.getpid()}\n")
-        assert procs.lock_holder(lock, "pytest") == os.getpid()
-        assert procs.lock_holder(lock, "alpha.main") is None
+        holder = subprocess.Popen(
+            [sys.executable, "-m", "timeit", "-n", "1", "-r", "1", "import time; time.sleep(30)"]
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while "timeit" not in procs.cmdline(holder.pid) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            lock = tmp_path / "unit.lock"
+            lock.write_text(f" {holder.pid}\n")
+            assert procs.lock_holder(lock, "timeit") == holder.pid
+            assert procs.lock_holder(lock, "alpha.main") is None
+        finally:
+            holder.kill()
+            holder.wait()
 
     def test_a_missing_or_garbled_lock_has_no_holder(self, tmp_path: Path):
         lock = tmp_path / "unit.lock"
