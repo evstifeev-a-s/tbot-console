@@ -86,6 +86,20 @@ class OrderWatch:
     callback: OrderCallback
 
 
+def _chosen_account(accounts: list[str], wanted: str, masked: str) -> str:
+    if wanted and wanted not in accounts:
+        raise ConfigurationError(
+            f"IBKR_ACCOUNT {mask_account(wanted)} is not among the accounts this login "
+            f"sees ({masked}); nothing is sent"
+        )
+    if not wanted and len(accounts) > 1:
+        raise ConfigurationError(
+            f"this IBKR login sees {len(accounts)} accounts ({masked}): set IBKR_ACCOUNT "
+            "to the one orders go to"
+        )
+    return wanted or accounts[0]
+
+
 def _ticked(price: float, spec: ContractSpec, currency: str) -> float:
     return snap(price, price_step(price, spec.min_tick, currency))
 
@@ -290,18 +304,7 @@ class IBKRTrader:
                 "restart the trading process; a hand start needs IBKR_ALLOW_LIVE_TRADING=true "
                 "in its terminal"
             )
-        wanted = self._config.account
-        if wanted and wanted not in accounts:
-            raise ConfigurationError(
-                f"IBKR_ACCOUNT {mask_account(wanted)} is not among the accounts this login "
-                f"sees ({masked}); nothing is sent"
-            )
-        if not wanted and len(accounts) > 1:
-            raise ConfigurationError(
-                f"this IBKR login sees {len(accounts)} accounts ({masked}): set IBKR_ACCOUNT "
-                "to the one orders go to"
-            )
-        return wanted or accounts[0], kind
+        return _chosen_account(accounts, self._config.account, masked), kind
 
     def _hook(self) -> None:
         if self._hooked:
@@ -896,9 +899,7 @@ class IBKRTrader:
         if not self._ours(trade):
             return
         status = trade.orderStatus
-        last = trade.log[-1] if trade.log else None
-        code = last.errorCode if last is not None and last.errorCode else None
-        reason = last.message if code is not None and last is not None else ""
+        code, reason = _last_error(trade)
         self._safe_write(
             "status",
             order_id=trade.order.orderId,
@@ -923,12 +924,7 @@ class IBKRTrader:
         if status == OrderStatus.Filled:
             return "filled"
         if status in (OrderStatus.Cancelled, OrderStatus.ApiCancelled):
-            if trade.order.orderId in self._changing and code not in (None, CANCELLED_CODE):
-                return "notice"
-            never_accepted = trade.order.orderId not in self._accepted
-            if code == REJECTED_CODE or (code not in (None, CANCELLED_CODE) and never_accepted):
-                return "rejected"
-            return "cancelled"
+            return self._cancel_kind(trade.order.orderId, code)
         if status == OrderStatus.Inactive:
             return "rejected"
         if status == OrderStatus.ValidationError:
@@ -936,6 +932,14 @@ class IBKRTrader:
         if status in LIVE_ORDER:
             return "partial" if trade.orderStatus.filled > 0 else "accepted"
         return None
+
+    def _cancel_kind(self, order_id: int, code: int | None) -> OrderEventKind:
+        refused = code not in (None, CANCELLED_CODE)
+        if refused and order_id in self._changing:
+            return "notice"
+        if code == REJECTED_CODE or (refused and order_id not in self._accepted):
+            return "rejected"
+        return "cancelled"
 
     def _on_fill(self, trade: Trade, fill: Fill) -> None:
         if not self._ours(trade):
@@ -987,24 +991,34 @@ class IBKRTrader:
     ) -> None:
         order_id = trade.order.orderId
         done = trade.orderStatus.filled if filled is None else filled
-        if kind in ("partial", "filled"):
-            if done <= self._filled.get(order_id, 0.0):
-                return
-            self._filled[order_id] = done
-            self._accepted.add(order_id)
-            if kind == "filled":
-                self._finished.add(order_id)
-        elif kind == "accepted":
-            if order_id in self._accepted or order_id in self._finished:
-                return
-            self._accepted.add(order_id)
-        elif kind != "notice":
-            if order_id in self._finished:
-                return
-            self._finished.add(order_id)
+        if not self._is_news(kind, order_id, done):
+            return
         event = self._event(kind, trade, code, reason, done, avg)
         for watch in list(self._watchers):
             self._client._deliver("order", event.ref or str(order_id), watch.callback, event)
+
+    def _is_news(self, kind: OrderEventKind, order_id: int, done: float) -> bool:
+        if kind in ("partial", "filled"):
+            return self._new_fill(order_id, done, finished=kind == "filled")
+        if kind == "accepted":
+            news = order_id not in self._accepted and order_id not in self._finished
+            if news:
+                self._accepted.add(order_id)
+            return news
+        if kind == "notice":
+            return True
+        news = order_id not in self._finished
+        self._finished.add(order_id)
+        return news
+
+    def _new_fill(self, order_id: int, done: float, *, finished: bool) -> bool:
+        if done <= self._filled.get(order_id, 0.0):
+            return False
+        self._filled[order_id] = done
+        self._accepted.add(order_id)
+        if finished:
+            self._finished.add(order_id)
+        return True
 
     def _event(
         self,
