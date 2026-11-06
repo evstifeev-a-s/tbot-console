@@ -287,6 +287,28 @@ def quote_from_ticker(symbol: str, ticker: Ticker) -> IBKRQuote:
     )
 
 
+def _snapshot(
+    key: str, contract: Contract, tickers: dict[int, Ticker], errors: RequestErrors
+) -> Ticker | None:
+    failure = errors.by_contract.get(contract.conId)
+    if failure is not None:
+        LOG.warning("IBKR quote skipped for %s: error %d: %s", key, *failure)
+        return None
+    ticker = tickers.get(contract.conId)
+    if ticker is None:
+        return None
+    partly = errors.partial.get(contract.conId)
+    if partly is not None and ticker.time is None:
+        LOG.warning(
+            "IBKR quote skipped for %s: error %d: %s (the snapshot ended before any price)",
+            key,
+            PARTLY_SUBSCRIBED,
+            partly,
+        )
+        return None
+    return ticker
+
+
 def spec_from_details(
     instrument: IBKRInstrument, details: ContractDetails, contract: Contract
 ) -> ContractSpec:
@@ -452,6 +474,37 @@ def hits_from_scan_data(rows: Iterable[ScanData]) -> list[ScanHit]:
             )
         )
     return sorted(hits, key=lambda hit: hit.rank)
+
+
+def _taken(
+    fresh: Iterable[Any], kind: TapeKind, key: str, until: float, room: int
+) -> tuple[list[Any], bool]:
+    items: list[Any] = []
+    for tick in fresh:
+        item = history_from(kind, key, tick)
+        if item is None:
+            continue
+        if item.time > until:
+            return items, True
+        items.append(item)
+        if len(items) >= room:
+            return items, True
+    return items, False
+
+
+def _next_page(what: str, page: Sequence[Any], fresh: Sequence[Any]) -> tuple[datetime, int, int]:
+    last = second_of(epoch(page[-1].time))
+    if fresh:
+        seen = sum(1 for tick in page if second_of(epoch(tick.time)) == last)
+        return datetime.fromtimestamp(last, UTC), last, seen
+    LOG.warning(
+        "IBKR %s: more than %d ticks within the second %s; IB cannot page inside "
+        "one second, so the rest of it is skipped",
+        what,
+        len(page),
+        datetime.fromtimestamp(last, UTC).isoformat(),
+    )
+    return datetime.fromtimestamp(last + 1, UTC), -1, 0
 
 
 ScanCallback = Callable[[list[ScanHit]], Any]
@@ -627,9 +680,26 @@ class IBKRClient:
         return quotes.get(instrument.to_normalized())
 
     async def fetch_quotes(self, instruments: Sequence[IBKRInstrument]) -> dict[str, IBKRQuote]:
-        if not instruments:
+        pairs = await self._quotable(instruments)
+        if not pairs:
             return {}
 
+        with self._errors() as errors:
+            tickers = await self._request(
+                lambda: self._ib.reqTickersAsync(*[contract for _, contract in pairs]), "tickers"
+            )
+        by_con_id = {t.contract.conId: t for t in tickers if t.contract is not None}
+
+        quotes: dict[str, IBKRQuote] = {}
+        for key, contract in pairs:
+            ticker = _snapshot(key, contract, by_con_id, errors)
+            if ticker is not None:
+                quotes[key] = quote_from_ticker(key, ticker)
+        return quotes
+
+    async def _quotable(self, instruments: Sequence[IBKRInstrument]) -> list[tuple[str, Contract]]:
+        if not instruments:
+            return []
         unique = list(dict.fromkeys(instruments))
         found = await asyncio.gather(
             *(self._qualified_contract(instrument) for instrument in unique),
@@ -644,36 +714,7 @@ class IBKRClient:
                 raise contract
             else:
                 pairs.append((key, contract))
-
-        if not pairs:
-            return {}
-
-        with self._errors() as errors:
-            tickers = await self._request(
-                lambda: self._ib.reqTickersAsync(*[contract for _, contract in pairs]), "tickers"
-            )
-        by_con_id = {t.contract.conId: t for t in tickers if t.contract is not None}
-
-        quotes: dict[str, IBKRQuote] = {}
-        for key, contract in pairs:
-            failure = errors.by_contract.get(contract.conId)
-            if failure is not None:
-                LOG.warning("IBKR quote skipped for %s: error %d: %s", key, *failure)
-                continue
-            ticker = by_con_id.get(contract.conId)
-            if ticker is None:
-                continue
-            partly = errors.partial.get(contract.conId)
-            if partly is not None and ticker.time is None:
-                LOG.warning(
-                    "IBKR quote skipped for %s: error %d: %s (the snapshot ended before any price)",
-                    key,
-                    PARTLY_SUBSCRIBED,
-                    partly,
-                )
-                continue
-            quotes[key] = quote_from_ticker(key, ticker)
-        return quotes
+        return pairs
 
     async def fetch_bars(
         self,
@@ -1182,42 +1223,19 @@ class IBKRClient:
         key = instrument.to_normalized()
         what = f"{kind} history of {key}"
         contract = await self._qualified_contract(instrument)
-        cursor = utc(start)
+        cursor, boundary, seen = utc(start), -1, 0
         out: list[Any] = []
-        boundary, seen = -1, 0
-        while len(out) < limit:
+        while True:
             asked = min(TICK_PAGE, limit - len(out) + seen)
             page = await self._tick_page(
                 contract, what, cursor, asked, TAPE_HISTORY[kind], rth_only
             )
             fresh = fresh_ticks(page, lambda tick: epoch(tick.time), boundary, seen)
-            for tick in fresh:
-                item = history_from(kind, key, tick)
-                if item is None:
-                    continue
-                if item.time > until:
-                    return out
-                out.append(item)
-                if len(out) >= limit:
-                    return out
-            if len(page) < asked:
+            items, done = _taken(fresh, kind, key, until, limit - len(out))
+            out += items
+            if done or len(page) < asked:
                 return out
-            last = second_of(epoch(page[-1].time))
-            if not fresh:
-                LOG.warning(
-                    "IBKR %s: more than %d ticks within the second %s; IB cannot page inside "
-                    "one second, so the rest of it is skipped",
-                    what,
-                    len(page),
-                    datetime.fromtimestamp(last, UTC).isoformat(),
-                )
-                last += 1
-                boundary, seen = -1, 0
-            else:
-                boundary = last
-                seen = sum(1 for tick in page if second_of(epoch(tick.time)) == last)
-            cursor = datetime.fromtimestamp(last, UTC)
-        return out
+            cursor, boundary, seen = _next_page(what, page, fresh)
 
     async def _tick_page(
         self,
