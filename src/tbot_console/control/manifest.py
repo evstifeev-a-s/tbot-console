@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import PureWindowsPath
 from typing import Annotated, Literal, Self
 
@@ -167,48 +168,9 @@ class UnitManifest(_Frozen):
 
     @model_validator(mode="after")
     def _coherent(self) -> Self:
-        if self.id in RESERVED_IDS:
-            raise ValueError(f"имя «{self.id}» занято консолью")
-        if self.api is not None and self.api.process not in self.processes:
-            raise ValueError(f"api.process «{self.api.process}» не описан в processes")
-        if self.api is not None and self.processes[self.api.process].ready.port not in (
-            None,
-            self.api.port,
-        ):
-            raise ValueError("у службы порт задаётся в api.port, ready.port должен совпадать с ним")
-        if self.id in self.legacy_pages:
-            raise ValueError(f"legacy_pages не может содержать собственное имя «{self.id}»")
-        unguarded = sorted(n for n, p in self.processes.items() if p.places_orders and not p.check)
-        if unguarded:
-            raise ValueError(
-                "процесс, который ставит заявки, проходит проверку перед каждым запуском: "
-                "check=true для " + ", ".join(unguarded)
-            )
-        eager = sorted(n for n, p in self.processes.items() if p.autostart and self.trades(n))
-        if eager:
-            raise ValueError(
-                "торговый процесс не запускается сам: autostart должен быть false для "
-                + ", ".join(eager)
-            )
-        if self.places_orders:
-            unchecked = sorted(
-                n
-                for n, p in self.processes.items()
-                if not p.check and (self.api is None or n != self.api.process)
-            )
-            if unchecked:
-                raise ValueError(
-                    "у торговой стратегии каждый процесс, кроме службы, проходит проверку: "
-                    "check=true для " + ", ".join(unchecked)
-                )
-        guarded = [p for p in self.processes.values() if self.places_orders or p.places_orders]
-        for key in sorted({name for spec in guarded for name in spec.env}):
-            prefix = key.split("_", 1)[0] + "_"
-            if prefix != PLATFORM_ENV_PREFIX and prefix not in self.env_files_ignore.prefixes:
-                raise ValueError(
-                    f"торговая стратегия задаёт {key}, но не отбрасывает {prefix} "
-                    "из env-файлов: .env мог бы подменить её настройки"
-                )
+        problem = next(filter(None, (check(self) for check in COHERENCE_CHECKS)), None)
+        if problem is not None:
+            raise ValueError(problem)
         return self
 
     @property
@@ -237,3 +199,87 @@ class UnitManifest(_Frozen):
             return None
         is_api = self.api is not None and self.api.process == proc
         return port, f"/api/{self.id}/health" if is_api else "/"
+
+
+def _id_free(unit: UnitManifest) -> str | None:
+    return f"имя «{unit.id}» занято консолью" if unit.id in RESERVED_IDS else None
+
+
+def _api_described(unit: UnitManifest) -> str | None:
+    if unit.api is not None and unit.api.process not in unit.processes:
+        return f"api.process «{unit.api.process}» не описан в processes"
+    return None
+
+
+def _api_port_agrees(unit: UnitManifest) -> str | None:
+    if unit.api is not None and unit.processes[unit.api.process].ready.port not in (
+        None,
+        unit.api.port,
+    ):
+        return "у службы порт задаётся в api.port, ready.port должен совпадать с ним"
+    return None
+
+
+def _legacy_pages_foreign(unit: UnitManifest) -> str | None:
+    if unit.id in unit.legacy_pages:
+        return f"legacy_pages не может содержать собственное имя «{unit.id}»"
+    return None
+
+
+def _order_processes_checked(unit: UnitManifest) -> str | None:
+    unguarded = sorted(n for n, p in unit.processes.items() if p.places_orders and not p.check)
+    if unguarded:
+        return (
+            "процесс, который ставит заявки, проходит проверку перед каждым запуском: "
+            "check=true для " + ", ".join(unguarded)
+        )
+    return None
+
+
+def _trading_not_autostarted(unit: UnitManifest) -> str | None:
+    eager = sorted(n for n, p in unit.processes.items() if p.autostart and unit.trades(n))
+    if eager:
+        return "торговый процесс не запускается сам: autostart должен быть false для " + ", ".join(
+            eager
+        )
+    return None
+
+
+def _strategy_processes_checked(unit: UnitManifest) -> str | None:
+    if not unit.places_orders:
+        return None
+    unchecked = sorted(
+        n
+        for n, p in unit.processes.items()
+        if not p.check and (unit.api is None or n != unit.api.process)
+    )
+    if unchecked:
+        return (
+            "у торговой стратегии каждый процесс, кроме службы, проходит проверку: "
+            "check=true для " + ", ".join(unchecked)
+        )
+    return None
+
+
+def _trading_env_shielded(unit: UnitManifest) -> str | None:
+    guarded = [p for p in unit.processes.values() if unit.places_orders or p.places_orders]
+    for key in sorted({name for spec in guarded for name in spec.env}):
+        prefix = key.split("_", 1)[0] + "_"
+        if prefix != PLATFORM_ENV_PREFIX and prefix not in unit.env_files_ignore.prefixes:
+            return (
+                f"торговая стратегия задаёт {key}, но не отбрасывает {prefix} "
+                "из env-файлов: .env мог бы подменить её настройки"
+            )
+    return None
+
+
+COHERENCE_CHECKS: tuple[Callable[[UnitManifest], str | None], ...] = (
+    _id_free,
+    _api_described,
+    _api_port_agrees,
+    _legacy_pages_foreign,
+    _order_processes_checked,
+    _trading_not_autostarted,
+    _strategy_processes_checked,
+    _trading_env_shielded,
+)
