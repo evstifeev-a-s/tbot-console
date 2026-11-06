@@ -79,7 +79,7 @@ class ProcessSpec(_Frozen):
             key
             for key in value
             if SECRET_KEY_RE.search(key)
-            or not (key.startswith(PLATFORM_ENV_PREFIX) or WIRING_KEY_RE.match(key))
+            or not (key.startswith(PLATFORM_ENV_PREFIX) or WIRING_KEY_RE.prefixmatch(key))
         )
         if refused:
             raise ValueError(
@@ -263,7 +263,7 @@ def _strategy_processes_checked(unit: UnitManifest) -> str | None:
 
 def _trading_env_shielded(unit: UnitManifest) -> str | None:
     guarded = [p for p in unit.processes.values() if unit.places_orders or p.places_orders]
-    for key in sorted({name for spec in guarded for name in spec.env}):
+    for key in sorted({*spec.env for spec in guarded}):
         prefix = key.split("_", 1)[0] + "_"
         if prefix != PLATFORM_ENV_PREFIX and prefix not in unit.env_files_ignore.prefixes:
             return (

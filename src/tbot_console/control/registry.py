@@ -126,7 +126,7 @@ def load_root(base: Path) -> Registry:
             broken.append(parsed)
         else:
             units.append(parsed)
-    ports = Counter(port for unit in units for port in _ports(unit))
+    ports = Counter([*_ports(unit) for unit in units])
     clashing = {port for port, count in ports.items() if count > 1}
     accepted: list[UnitManifest] = []
     for unit in units:
