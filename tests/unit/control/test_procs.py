@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import os
+import socket
+import subprocess
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import psutil
 import pytest
@@ -83,3 +88,135 @@ class TestRepoFolder:
         twin = tmp_path / "repo"
         if twin.exists():
             assert procs.in_repo(repo, twin)
+
+
+@pytest.fixture
+def listener() -> Iterator[int]:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        yield int(server.getsockname()[1])
+
+
+def lsof_answer(stdout: str, code: int = 0) -> Callable[..., subprocess.CompletedProcess[str]]:
+    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert argv[0] == "lsof" and argv[2].startswith("-tiTCP:")
+        assert kwargs["timeout"] == 5
+        done = subprocess.CompletedProcess(argv, code, stdout, "")
+        if kwargs.get("check"):
+            done.check_returncode()
+        return done
+
+    return run
+
+
+def lsof_fails(error: BaseException) -> Callable[..., subprocess.CompletedProcess[str]]:
+    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise error
+
+    return run
+
+
+def connections(*found: Any) -> Callable[..., list[Any]]:
+    def net_connections(kind: str) -> list[Any]:
+        assert kind == "inet"
+        return list(found)
+
+    return net_connections
+
+
+def conn(port: int, pid: int | None, status: str = psutil.CONN_LISTEN) -> Any:
+    address = SimpleNamespace(port=port) if port else None
+    return SimpleNamespace(status=status, laddr=address, pid=pid)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the console looks up ports with lsof")
+class TestPortHolder:
+    def test_a_closed_port_has_no_holder(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(subprocess, "run", lsof_fails(AssertionError("lsof never runs")))
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            closed = int(probe.getsockname()[1])
+        assert procs.port_holder(closed) is None
+
+    def test_the_listener_is_this_process(self, listener: int):
+        assert procs.port_holder(listener) == os.getpid()
+
+    def test_lsof_names_the_first_pid_it_prints(
+        self, listener: int, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(subprocess, "run", lsof_answer("warning\n4242\n4343\n"))
+        assert procs.port_holder(listener) == 4242
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            lsof_answer("", code=1),
+            lsof_answer("no pid here\n"),
+            lsof_fails(OSError("no lsof")),
+            lsof_fails(subprocess.TimeoutExpired("lsof", 5)),
+        ],
+    )
+    def test_without_an_answer_from_lsof_the_socket_table_decides(
+        self, listener: int, monkeypatch: pytest.MonkeyPatch, failure: Callable[..., Any]
+    ):
+        monkeypatch.setattr(subprocess, "run", failure)
+        monkeypatch.setattr(
+            psutil,
+            "net_connections",
+            connections(
+                conn(listener, 1, psutil.CONN_ESTABLISHED),
+                conn(0, 2),
+                conn(listener + 1, 3),
+                conn(listener, 5151),
+                conn(listener, 6161),
+            ),
+        )
+        assert procs.port_holder(listener) == 5151
+
+    def test_a_listener_without_a_known_pid_reads_as_none(
+        self, listener: int, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(subprocess, "run", lsof_answer(""))
+        monkeypatch.setattr(psutil, "net_connections", connections(conn(listener, None)))
+        assert procs.port_holder(listener) is None
+
+    @pytest.mark.parametrize("error", [psutil.AccessDenied(), OSError("refused")])
+    def test_an_unreadable_socket_table_reads_as_no_holder(
+        self, listener: int, monkeypatch: pytest.MonkeyPatch, error: BaseException
+    ):
+        monkeypatch.setattr(subprocess, "run", lsof_answer(""))
+
+        def refused(kind: str) -> list[Any]:
+            raise error
+
+        monkeypatch.setattr(psutil, "net_connections", refused)
+        assert procs.port_holder(listener) is None
+
+    def test_no_listener_in_the_socket_table_reads_as_no_holder(
+        self, listener: int, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(subprocess, "run", lsof_answer(""))
+        monkeypatch.setattr(psutil, "net_connections", connections())
+        assert procs.port_holder(listener) is None
+
+
+class TestLockHolder:
+    def test_the_live_pid_in_the_lock_running_the_module_holds_it(self, tmp_path: Path):
+        lock = tmp_path / "unit.lock"
+        lock.write_text(f" {os.getpid()}\n")
+        assert procs.lock_holder(lock, "pytest") == os.getpid()
+        assert procs.lock_holder(lock, "alpha.main") is None
+
+    def test_a_missing_or_garbled_lock_has_no_holder(self, tmp_path: Path):
+        lock = tmp_path / "unit.lock"
+        assert procs.lock_holder(lock, "pytest") is None
+        lock.write_text("pid=12")
+        assert procs.lock_holder(lock, "pytest") is None
+
+    def test_a_dead_pid_in_the_lock_has_no_holder(self, tmp_path: Path):
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        lock = tmp_path / "unit.lock"
+        lock.write_text(str(gone.pid))
+        assert procs.lock_holder(lock, "pytest") is None

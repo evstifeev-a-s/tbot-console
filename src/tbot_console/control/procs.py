@@ -376,10 +376,19 @@ def find_instances(base: Path, spec: ProcessSpec, exclude: set[int] | None = Non
 
 
 def port_holder(port: int) -> int | None:
+    if not _listened(port):
+        return None
+    holder = _lsof_listener(port)
+    return holder if holder is not None else _socket_table_listener(port)
+
+
+def _listened(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.3)
-        if probe.connect_ex(("127.0.0.1", port)) != 0:
-            return None
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _lsof_listener(port: int) -> int | None:
     try:
         found = subprocess.run(
             ["lsof", "-nP", f"-tiTCP:{port}", "-sTCP:LISTEN"],
@@ -389,11 +398,11 @@ def port_holder(port: int) -> int | None:
             check=False,
         )
     except OSError, subprocess.TimeoutExpired:
-        found = None
-    if found is not None:
-        for line in found.stdout.split():
-            if line.isdigit():
-                return int(line)
+        return None
+    return next((int(line) for line in found.stdout.split() if line.isdigit()), None)
+
+
+def _socket_table_listener(port: int) -> int | None:
     try:
         for conn in psutil.net_connections(kind="inet"):
             if conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port:
