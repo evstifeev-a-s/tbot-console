@@ -489,3 +489,24 @@ class TestAdopt:
         assert failed_with(root, "mismatch") == "дескриптор бота называет процесс 909, а не 303"
         write_json_atomic(root / "state/run.json", {"pid": 303})
         assert execute(root, CHECKED, "adopt", 303)[0] == ops.EXIT_OK
+
+
+class TestCheckFailures:
+    def test_the_failed_checks_are_named_with_their_detail(self):
+        checks = [
+            {"id": "budget", "ok": True},
+            {"id": "keys", "ok": False, "detail": "нет ключа"},
+            "junk",
+            {"id": "port", "ok": False},
+        ]
+        result = ops.CheckResult(False, {"checks": checks}, "trace")
+        assert result.failures() == "keys: нет ключа; port: "
+
+    def test_without_named_failures_the_last_stderr_lines_explain(self):
+        stderr = "\n".join(f"line {n}" for n in range(8)) + "\n"
+        assert ops.CheckResult(False, {}, stderr).failures() == (
+            "line 3 / line 4 / line 5 / line 6 / line 7"
+        )
+        assert ops.CheckResult(False, {"checks": None}, "  \n").failures() == (
+            "проверка не вернула результата"
+        )

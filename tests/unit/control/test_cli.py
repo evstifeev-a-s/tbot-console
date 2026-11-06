@@ -216,3 +216,29 @@ def test_check_passes_when_every_check_passes(
     monkeypatch.setattr(ops, "run_check", lambda *_: ops.CheckResult(True, {}, ""))
     assert cli.main(["check", "alpha:bot"]) == 0
     assert capsys.readouterr().out.splitlines() == ["alpha:bot: проверка пройдена"]
+
+
+def test_output_prints_the_last_lines_of_each_process(root, capsys: pytest.CaptureFixture[str]):
+    write_manifest(root, fixture_manifest("alpha"))
+    log = root / "logs/units/alpha.bot.out"
+    log.parent.mkdir(parents=True)
+    log.write_text("one\ntwo\nthree\n")
+    assert cli.main(["output", "alpha", "-n", "2"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "== alpha:bot — logs/units/alpha.bot.out",
+        "two",
+        "three",
+        "== alpha:api — logs/units/alpha.api.out",
+    ]
+
+
+def test_json_prints_the_views_of_the_target_or_of_everything(
+    root, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+):
+    write_manifest(root, fixture_manifest("alpha"))
+    monkeypatch.setattr(state, "process_view", lambda base, unit, proc: {"name": proc})
+    assert cli.main(["json", "alpha:bot"]) == 0
+    assert json.loads(capsys.readouterr().out) == [{"unit": "alpha", "name": "bot"}]
+    assert cli.main(["json"]) == 0
+    listed = [(view["unit"], view["name"]) for view in json.loads(capsys.readouterr().out)]
+    assert sorted(listed) == [("alpha", "api"), ("alpha", "bot"), ("console", "web")]
