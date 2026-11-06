@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-TONE_RANK = {"idle": 0, "ok": 1, "warn": 2, "bad": 3}
+TONE_RANK = frozendict({"idle": 0, "ok": 1, "warn": 2, "bad": 3})
 
 
 def metric(

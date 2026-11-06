@@ -14,11 +14,13 @@ from tbot_console.control.logs import configure_logging
 
 LOG = logging.getLogger(__name__)
 
-SECURITY_HEADERS = {
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    "Referrer-Policy": "no-referrer",
-}
+SECURITY_HEADERS = frozendict(
+    {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+    }
+)
 
 STARTED_AT = time.time()
 

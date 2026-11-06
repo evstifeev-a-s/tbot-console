@@ -15,24 +15,28 @@ from tbot_console.control.manifest import UnitManifest
 
 TERMINAL_PHASES = frozenset({"done", "failed"})
 LOCK_RETRY_S = 0.2
-PHASE_STATES = {
-    "checking": "checking",
-    "stopping": "stopping",
-    "starting": "starting",
-    "waiting_ready": "starting",
-}
+PHASE_STATES = frozendict(
+    {
+        "checking": "checking",
+        "stopping": "stopping",
+        "starting": "starting",
+        "waiting_ready": "starting",
+    }
+)
 
-STATE_NAMES = {
-    "running": "работает",
-    "starting": "запускается",
-    "stopping": "останавливается",
-    "checking": "проверяется",
-    "stopped": "остановлен",
-    "exited": "упал",
-    "stuck": "завис при остановке",
-    "interrupted": "операция прервана",
-    "foreign": "работает без присмотра консоли",
-}
+STATE_NAMES = frozendict(
+    {
+        "running": "работает",
+        "starting": "запускается",
+        "stopping": "останавливается",
+        "checking": "проверяется",
+        "stopped": "остановлен",
+        "exited": "упал",
+        "stuck": "завис при остановке",
+        "interrupted": "операция прервана",
+        "foreign": "работает без присмотра консоли",
+    }
+)
 
 TRADING_CONFIRM = (
     "Это торговый процесс: он сам отправляет заявки. Пока он остановлен, его позиции никто "

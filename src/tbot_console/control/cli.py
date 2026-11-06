@@ -15,7 +15,7 @@ from tbot_console.control.manifest import UnitManifest
 from tbot_console.control.registry import Registry, load_registry
 from tbot_console.control.status import duration
 
-KIND_ORDER = {"system": 0, "strategy": 1, "monitor": 2}
+KIND_ORDER = frozendict({"system": 0, "strategy": 1, "monitor": 2})
 UI_LINKS = (
     "js/api.js",
     "js/dom.js",

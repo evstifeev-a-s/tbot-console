@@ -16,7 +16,7 @@ LOG = logging.getLogger(__name__)
 
 LIVE_TRADING_ENV = "IBKR_ALLOW_LIVE_TRADING"
 Via = Literal["console", "cli"]
-VIA_NAMES: dict[str, str] = {"console": "в консоли", "cli": "командой tbot live"}
+VIA_NAMES = frozendict({"console": "в консоли", "cli": "командой tbot live"})
 RESTART_HINT = "переключатель изменён — перезапустите процесс, чтобы применить"
 
 

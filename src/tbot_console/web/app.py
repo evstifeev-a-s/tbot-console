@@ -21,13 +21,15 @@ STATIC_DIR = Path(__file__).parent / "static"
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
 
-SECURITY_HEADERS = {
-    "Content-Security-Policy": (
-        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-    ),
-    **SERVICE_HEADERS,
-}
+SECURITY_HEADERS = frozendict(
+    {
+        "Content-Security-Policy": (
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        ),
+        **SERVICE_HEADERS,
+    }
+)
 
 PROXIED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
