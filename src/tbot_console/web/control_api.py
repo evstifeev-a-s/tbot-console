@@ -78,22 +78,30 @@ async def _status(unit: UnitManifest) -> tuple[dict[str, Any] | None, Any, str |
     except httpx.HTTPError as e:
         return api, None, f"ошибка связи со службой: {e}"
     api["reachable"] = True
+    payload, problem = _read_status(response)
+    return api, payload, problem
+
+
+def _read_status(response: httpx.Response) -> tuple[Any, str | None]:
     if response.status_code == 404:
-        return api, None, "служба не отдаёт сводку — вероятно, работает старая версия"
+        return None, "служба не отдаёт сводку — вероятно, работает старая версия"
     if response.status_code != 200:
-        try:
-            detail = response.json().get("detail")
-        except ValueError, AttributeError:
-            detail = None
-        suffix = f": {detail}" if detail else ""
-        return api, None, f"служба ответила кодом {response.status_code}{suffix}"
+        return None, f"служба ответила кодом {response.status_code}{_detail_suffix(response)}"
     try:
         payload = response.json()
     except ValueError:
-        return api, None, "служба прислала сводку не в JSON"
+        return None, "служба прислала сводку не в JSON"
     if not _valid_status(payload):
-        return api, None, "служба прислала сводку непонятного вида"
-    return api, payload, None
+        return None, "служба прислала сводку непонятного вида"
+    return payload, None
+
+
+def _detail_suffix(response: httpx.Response) -> str:
+    try:
+        detail = response.json().get("detail")
+    except ValueError, AttributeError:
+        detail = None
+    return f": {detail}" if detail else ""
 
 
 async def units_payload() -> dict[str, Any]:

@@ -75,6 +75,33 @@ def unit_asset(ui: str, path: str) -> Path | None:
     return target if target.is_file() and target.is_relative_to(directory) else None
 
 
+def _is_api(request: Request) -> bool:
+    return request.url.path.startswith("/api")
+
+
+def _refusal(request: Request) -> JSONResponse | None:
+    if not host_allowed(host_name(request.headers.get("host", ""))):
+        return _refuse(400, "консоль отвечает только на своём адресе")
+    is_api = _is_api(request)
+    unmarked = request.headers.get(CONSOLE_HEADER) != "1"
+    if is_api and request.method not in SAFE_METHODS and unmarked:
+        return _refuse(403, "запрос без заголовка консоли отклонён (защита от чужих сайтов)")
+    token = configured_token()
+    if token is not None and is_api:
+        provided = _bearer_token(request)
+        if provided is None or not secrets.compare_digest(provided.encode(), token.encode()):
+            return _refuse(401, "missing or invalid token", {"WWW-Authenticate": "Bearer"})
+    return None
+
+
+def _secured(response: Response, is_api: bool) -> Response:
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    if not is_api:
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Trading console", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -82,23 +109,10 @@ def create_app() -> FastAPI:
     async def security_middleware(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if not host_allowed(host_name(request.headers.get("host", ""))):
-            return _refuse(400, "консоль отвечает только на своём адресе")
-        is_api = request.url.path.startswith("/api")
-        unmarked = request.headers.get(CONSOLE_HEADER) != "1"
-        if is_api and request.method not in SAFE_METHODS and unmarked:
-            return _refuse(403, "запрос без заголовка консоли отклонён (защита от чужих сайтов)")
-        token = configured_token()
-        if token is not None and is_api:
-            provided = _bearer_token(request)
-            if provided is None or not secrets.compare_digest(provided.encode(), token.encode()):
-                return _refuse(401, "missing or invalid token", {"WWW-Authenticate": "Bearer"})
-        response = await call_next(request)
-        for name, value in SECURITY_HEADERS.items():
-            response.headers.setdefault(name, value)
-        if not is_api:
-            response.headers["Cache-Control"] = "no-cache"
-        return response
+        refusal = _refusal(request)
+        if refusal is not None:
+            return refusal
+        return _secured(await call_next(request), _is_api(request))
 
     app.include_router(control_api.router)
 

@@ -79,6 +79,19 @@ class TestUnits:
         assert alpha["status"] is None
         assert alpha["status_error"] == error
 
+    @pytest.mark.parametrize(
+        ("answer", "error", "reachable"),
+        [
+            (httpx.ReadError("reset by peer"), "ошибка связи со службой: reset by peer", None),
+            (httpx.Response(200, text="<html>"), "служба прислала сводку не в JSON", True),
+        ],
+    )
+    def test_a_broken_answer_is_described(self, console, services, answer, error, reachable):
+        services.answers["/api/alpha/status"] = answer
+        alpha = console.get("/api/control/units").json()["units"][1]
+        assert (alpha["status"], alpha["status_error"]) == (None, error)
+        assert alpha["api"]["reachable"] is reachable
+
     def test_a_malformed_status_is_not_passed_on(self, console, services):
         services.answers["/api/alpha/status"] = httpx.Response(200, json={"tone": "ok"})
         alpha = console.get("/api/control/units").json()["units"][1]

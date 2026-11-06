@@ -67,6 +67,12 @@ async def forward(
     if target is None:
         return _answer(404, f"у службы «{unit.title}» нет такого запроса: {path}")
     url = f"{unit.api_url()}{target}" + (f"?{query}" if query else "")
+    return await _send(unit, method, url, body, content_type)
+
+
+async def _send(
+    unit: UnitManifest, method: str, url: str, body: bytes, content_type: str | None
+) -> Forwarded:
     headers = {"content-type": content_type} if content_type else {}
     try:
         response = await shared_client().request(method, url, content=body or None, headers=headers)
@@ -76,9 +82,12 @@ async def forward(
         return _answer(504, f"служба «{unit.title}» не ответила за {TIMEOUT.read:.0f} с")
     except httpx.HTTPError as e:
         return _answer(502, f"служба «{unit.title}» ответила с ошибкой транспорта: {e}")
-    forwarded = {
+    return Forwarded(response.status_code, response.content, _forwarded_headers(response))
+
+
+def _forwarded_headers(response: httpx.Response) -> dict[str, str]:
+    return {
         name: value
         for name in FORWARDED_RESPONSE_HEADERS
         if (value := response.headers.get(name)) is not None
     }
-    return Forwarded(response.status_code, response.content, forwarded)
