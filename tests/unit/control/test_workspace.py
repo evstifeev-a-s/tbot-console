@@ -51,7 +51,7 @@ def venv(base: Path, platform_version: str = PLATFORM_VERSION) -> Path:
     python.parent.mkdir(parents=True, exist_ok=True)
     python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
     python.chmod(0o755)
-    installed(base / ".venv/lib/python3.14/site-packages", platform_version)
+    installed(base / ".venv/lib/python3.15/site-packages", platform_version)
     return python
 
 
@@ -316,7 +316,7 @@ class TestInterpreter:
             procs.interpreter(bare)
 
     def test_console_scripts_come_from_the_units_own_venv(self, other):
-        site = other / ".venv/lib/python3.14/site-packages/demo-0.1.dist-info"
+        site = other / ".venv/lib/python3.15/site-packages/demo-0.1.dist-info"
         site.mkdir(parents=True)
         (site / "METADATA").write_text("Metadata-Version: 2.1\nName: demo\nVersion: 0.1\n")
         (site / "entry_points.txt").write_text("[console_scripts]\ndemo-live = beta.live:main\n")
