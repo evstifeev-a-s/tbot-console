@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+lazy import fcntl
 
 
 def read_object(path: Path) -> dict[str, Any] | None:
@@ -25,8 +26,6 @@ def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
 def flock_held(path: Path) -> bool | None:
     if sys.platform == "win32":
         return None
-    import fcntl
-
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError:

@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+lazy import fcntl
 
 from tbot_console.control import live, paths, procs
 from tbot_console.control.files import flock_held, read_object
@@ -58,8 +59,6 @@ def transition_lock(path: Path) -> Iterator[None]:
     procs.require_posix()
     if sys.platform == "win32":
         return
-    import fcntl
-
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     try:

@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+lazy import fcntl
 
 from tbot_console.control import paths
 from tbot_console.control.files import read_object, write_json_atomic
@@ -53,8 +54,6 @@ def _locked(home: Path) -> Iterator[None]:
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a") as handle:
         if sys.platform != "win32":
-            import fcntl
-
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         yield
 
