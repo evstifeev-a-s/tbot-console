@@ -54,6 +54,13 @@ def venv(base: Path, platform_version: str = PLATFORM_VERSION) -> Path:
     return python
 
 
+def exec_finished(pid: int, timeout: float = 5.0) -> int:
+    deadline = time.monotonic() + timeout
+    while Path(psutil.Process(pid).cmdline()[0]).name == "sh" and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return pid
+
+
 def refusal(found: registry.Registry) -> list[str]:
     return [broken.error for broken in found.broken]
 
@@ -348,7 +355,7 @@ class TestProcesses:
         assert cli.main(["start", "beta"]) == ops.EXIT_OK
         assert f"запускаю {fake / '.venv/bin/python'} -m fakeunit" in capsys.readouterr().out
         record = read_object(paths.state_path(fake, "beta", "main"))
-        pid = record["pid"]
+        pid = exec_finished(record["pid"])
         assert procs.cwd_of(pid) == fake.resolve()
         assert (fake / "logs/units/beta.main.out").is_file()
         assert not paths.run_dir(home).exists() or not list(paths.run_dir(home).glob("beta.*"))
@@ -361,7 +368,7 @@ class TestProcesses:
         self, home, fake, monkeypatch
     ):
         assert cli.main(["start", "beta"]) == ops.EXIT_OK
-        pid = read_object(paths.state_path(fake, "beta", "main"))["pid"]
+        pid = exec_finished(read_object(paths.state_path(fake, "beta", "main"))["pid"])
         bystander = subprocess.Popen(["sleep", "30"])
         describe = psutil.Process.cmdline
 
