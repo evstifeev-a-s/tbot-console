@@ -470,6 +470,42 @@ async def test_tick_history_stops_at_the_end_and_the_limit(client: IBKRClient, i
     assert await client.fetch_ticks(ROUTED, START, limit=0) == []
 
 
+async def test_an_empty_tick_request_asks_ib_nothing(client: IBKRClient, ib: FakeIB):
+    ib.history_ticks = history(list(range(10)))
+    assert await client.fetch_ticks(ROUTED, START, limit=0) == []
+    assert await client.fetch_ticks(ROUTED, START, limit=-5) == []
+    assert await client.fetch_ticks(ROUTED, START, START - timedelta(seconds=1)) == []
+    assert ib.detail_calls == [] and ib.tick_calls == []
+
+
+async def test_tick_history_asks_for_what_is_left_and_keeps_the_end_second(
+    client: IBKRClient, ib: FakeIB
+):
+    ib.history_ticks = history(list(range(10)))
+    assert [p.time for p in await client.fetch_ticks(ROUTED, START, START)] == [START.timestamp()]
+    assert len(await client.fetch_ticks(ROUTED, START, limit=1)) == 1
+    assert [(call["count"], call["rth"]) for call in ib.tick_calls] == [(1000, False), (1, False)]
+
+
+async def test_tick_history_asks_no_more_pages_once_past_the_end(
+    client: IBKRClient, ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(client_module, "TICK_PAGE", 3)
+    ib.history_ticks = history(list(range(10)))
+    prints = await client.fetch_ticks(ROUTED, START, START + timedelta(seconds=1))
+    assert len(prints) == 2 and len(ib.tick_calls) == 1
+
+
+async def test_after_a_skipped_second_the_next_page_asks_for_what_is_left(
+    client: IBKRClient, ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(client_module, "TICK_PAGE", 3)
+    ib.history_ticks = history([0, 0, 0, 0, 0, 1, 1])
+    prints = await client.fetch_ticks(ROUTED, START, limit=5)
+    assert [p.price for p in prints] == [2.0, 2.001, 2.002, 2.005, 2.006]
+    assert [call["count"] for call in ib.tick_calls] == [3, 3, 2]
+
+
 async def test_quote_history_reads_bid_and_ask(client: IBKRClient, ib: FakeIB):
     ib.history_ticks = history([0, 1], kind="quotes")
     quotes = await client.fetch_ticks(
