@@ -34,7 +34,7 @@ def test_up_starts_the_console_first_and_ends_with_its_address(root, started, ca
 
 def test_up_uses_the_console_port_from_the_workspace(root, started, capsys):
     write_manifest(root, fixture_manifest("beta"))
-    paths.workspace_file(root).write_text(json.dumps({"console_port": 18520}), encoding="utf-8")
+    paths.workspace_file(root).write_text(json.dumps({"console_port": 18520}))
     assert cli.main(["up"]) == 0
     assert capsys.readouterr().out.splitlines()[-1] == "консоль: http://127.0.0.1:18520"
 
@@ -63,7 +63,7 @@ def test_a_check_names_an_unreadable_manifest(root, capsys, monkeypatch):
     manifest = fixture_manifest("beta")
     manifest["processes"]["api"]["check"] = True
     write_manifest(root, manifest)
-    (paths.units_dir(root) / "x.json").write_text("{not json", encoding="utf-8")
+    (paths.units_dir(root) / "x.json").write_text("{not json")
     assert cli.main(["check", "beta:api"]) == 2
     assert "config/units/x.json" in capsys.readouterr().err
 
@@ -75,7 +75,7 @@ def test_ps_names_a_broken_file_relative_to_the_home(root, capsys, monkeypatch):
         lambda base, unit, proc: {"label": "", "pid": None, "since": None, "problem": None},
     )
     (paths.units_dir(root)).mkdir(parents=True)
-    (paths.units_dir(root) / "x.json").write_text("{not json", encoding="utf-8")
+    (paths.units_dir(root) / "x.json").write_text("{not json")
     assert cli.main(["ps"]) == 0
     assert "ОШИБКА в config/units/x.json: не JSON" in capsys.readouterr().out
 

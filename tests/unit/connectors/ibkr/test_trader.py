@@ -86,7 +86,7 @@ def events_of(path: Path, event: str) -> list[dict[str, Any]]:
 
 
 def journal_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    return path.read_text()
 
 
 def tear_journal(path: Path) -> None:

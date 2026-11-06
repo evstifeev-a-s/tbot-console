@@ -15,7 +15,7 @@ def write_manifest(root: Path, manifest: dict[str, Any]) -> Path:
     directory = paths.units_dir(root)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{manifest['id']}.json"
-    path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(manifest, ensure_ascii=False))
     return path
 
 

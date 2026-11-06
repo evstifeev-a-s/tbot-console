@@ -51,7 +51,7 @@ def enabled(home: Path, unit_id: str) -> bool:
 def _locked(home: Path) -> Iterator[None]:
     lock = paths.run_dir(home) / "live_trading.lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
-    with lock.open("a", encoding="utf-8") as handle:
+    with lock.open("a") as handle:
         if sys.platform != "win32":
             import fcntl
 
@@ -79,7 +79,7 @@ def _record(home: Path, unit_id: str, on: bool, via: Via) -> None:
     )
     log = paths.live_trading_log(home)
     log.parent.mkdir(parents=True, exist_ok=True)
-    with log.open("a", encoding="utf-8") as handle:
+    with log.open("a") as handle:
         handle.write(line + "\n")
         handle.flush()
         os.fsync(handle.fileno())

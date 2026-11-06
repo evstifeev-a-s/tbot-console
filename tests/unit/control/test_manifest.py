@@ -255,7 +255,7 @@ class TestRegistry:
 
     def test_a_broken_file_does_not_hide_the_others(self, root):
         write_manifest(root, fixture_manifest("alpha"))
-        (root / "config/units/bad.json").write_text("{not json", encoding="utf-8")
+        (root / "config/units/bad.json").write_text("{not json")
         found = load_registry(root)
         assert [unit.id for unit in found.units] == ["console", "alpha"]
         assert found.broken[0].file == "config/units/bad.json"

@@ -405,7 +405,7 @@ def port_holder(port: int) -> int | None:
 
 def lock_holder(lock: Path, module: str, base: Path | None = None) -> int | None:
     try:
-        raw = lock.read_text(encoding="utf-8").strip()
+        raw = lock.read_text().strip()
     except OSError:
         return None
     if not raw.isdigit():

@@ -26,7 +26,7 @@ def units(root: Path) -> dict[str, UnitManifest]:
 
 
 def switch_file(root: Path) -> dict[str, Any]:
-    return json.loads(paths.live_trading_file(root).read_text(encoding="utf-8"))
+    return json.loads(paths.live_trading_file(root).read_text())
 
 
 class TestSwitchFile:
@@ -48,7 +48,7 @@ class TestSwitchFile:
         assert stored["alpha"]["changed_at"] == on["changed_at"]
         assert on["changed_at"].endswith("+00:00")
         assert stored["gamma"] == {**stored["gamma"], "enabled": False, "via": "cli"}
-        trail = paths.live_trading_log(root).read_text(encoding="utf-8").splitlines()
+        trail = paths.live_trading_log(root).read_text().splitlines()
         assert len(trail) == 3
         assert trail[0].endswith("alpha: заявки разрешены на ЖИВОМ счёте (в консоли)")
         assert trail[2].endswith("gamma: заявки только на бумажный счёт (командой tbot live)")
@@ -67,13 +67,13 @@ class TestSwitchFile:
     def test_anything_but_a_literal_true_reads_as_off(self, root: Path, content: str):
         target = paths.live_trading_file(root)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        target.write_text(content)
         assert not live.enabled(root, "alpha")
 
     def test_a_broken_file_is_replaced_by_the_next_change(self, root: Path):
         target = paths.live_trading_file(root)
         target.parent.mkdir(parents=True)
-        target.write_text("{not json", encoding="utf-8")
+        target.write_text("{not json")
         live.change(root, "alpha", False, "cli")
         assert switch_file(root)["units"]["alpha"]["enabled"] is False
 

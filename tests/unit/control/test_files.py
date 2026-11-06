@@ -21,7 +21,7 @@ from tbot_console.control.files import flock_held, read_object, write_json_atomi
 def test_read_object(tmp_path, content, expected):
     path = tmp_path / "record.json"
     if content is not None:
-        path.write_text(content, encoding="utf-8")
+        path.write_text(content)
     assert read_object(path) == expected
 
 
@@ -34,10 +34,7 @@ def test_undecodable_bytes_read_as_nothing(tmp_path):
 def test_an_atomic_write_is_readable_sorted_and_leaves_no_temp_file(tmp_path):
     path = tmp_path / "run" / "record.json"
     write_json_atomic(path, {"b": "ё", "a": 1})
-    assert (
-        path.read_text(encoding="utf-8")
-        == json.dumps({"a": 1, "b": "ё"}, ensure_ascii=False, indent=2) + "\n"
-    )
+    assert path.read_text() == json.dumps({"a": 1, "b": "ё"}, ensure_ascii=False, indent=2) + "\n"
     assert read_object(path) == {"a": 1, "b": "ё"}
     assert [p.name for p in path.parent.iterdir()] == ["record.json"]
 

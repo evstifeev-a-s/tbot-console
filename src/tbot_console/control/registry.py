@@ -86,7 +86,7 @@ def explain(error: ValidationError, where: str = "описание") -> str:
 
 def _read(path: Path, where: str) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text())
     except OSError as e:
         return Broken(where, f"файл не читается: {e}")
     except UnicodeDecodeError:

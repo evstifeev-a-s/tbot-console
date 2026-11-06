@@ -9,7 +9,7 @@ from typing import Any
 
 def read_object(path: Path) -> dict[str, Any] | None:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text())
     except OSError, ValueError:
         return None
     return data if isinstance(data, dict) else None

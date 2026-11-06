@@ -14,7 +14,7 @@ TEMPLATE = Path(__file__).resolve().parents[1] / "fixtures" / "unit_repo"
 
 
 def test_the_template_pins_this_platform_release() -> None:
-    project = tomllib.loads((TEMPLATE / "pyproject.toml").read_text(encoding="utf-8"))
+    project = tomllib.loads((TEMPLATE / "pyproject.toml").read_text())
     source = project["tool"]["uv"]["sources"]["tbot-console"]
     assert source["tag"] == f"v{version('tbot-console')}"
     assert source["git"] == "https://github.com/evstifeev-a-s/tbot-console.git"
@@ -32,7 +32,7 @@ def test_the_template_modules_import_only_what_the_platform_ships() -> None:
 
 
 def test_the_template_keeps_local_files_out_of_git() -> None:
-    ignored = set((TEMPLATE / ".gitignore").read_text(encoding="utf-8").split())
+    ignored = set((TEMPLATE / ".gitignore").read_text().split())
     assert {
         ".env",
         ".env.*",

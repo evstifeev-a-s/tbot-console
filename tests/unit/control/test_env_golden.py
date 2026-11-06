@@ -13,7 +13,7 @@ from tbot_console.control.registry import console_manifest, load_registry
 from tests.unit.control.helpers import FIXTURE_UNITS
 
 GOLDEN: dict[str, Any] = json.loads(
-    (Path(__file__).parent / "fixtures/env_golden.json").read_text(encoding="utf-8")
+    (Path(__file__).parent / "fixtures/env_golden.json").read_text()
 )
 TRADING_PAIRS = ("alpha:bot", "alpha:api")
 
@@ -30,9 +30,9 @@ def prepare(root: Path, scenario: str) -> dict[str, UnitManifest]:
     shutil.copytree(FIXTURE_UNITS, paths.units_dir(root))
     for name, values in GOLDEN["scenarios"][scenario]["files"].items():
         text = "".join(f"{key}={value}\n" for key, value in values.items())
-        (root / name).write_text(text, encoding="utf-8")
+        (root / name).write_text(text)
     units = {
-        path.stem: UnitManifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        path.stem: UnitManifest.model_validate(json.loads(path.read_text()))
         for path in paths.manifest_files(root)
     }
     return {"console": console_manifest(), **units}
@@ -55,14 +55,14 @@ def golden(scenario: str) -> dict[str, dict[str, Any]]:
 
 def rewrite(root: Path, unit_id: str, change: dict[str, Any]) -> None:
     path = paths.units_dir(root) / f"{unit_id}.json"
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw = json.loads(path.read_text())
     for dotted, value in change.items():
         *parents, leaf = dotted.split(".")
         target = raw
         for key in parents:
             target = target[key]
         target[leaf] = value
-    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(raw, ensure_ascii=False))
 
 
 @pytest.mark.parametrize("scenario", ["A", "B"])
@@ -80,7 +80,7 @@ def test_broken_manifests_still_contribute_their_dropped_prefixes(tmp_path):
 
 def test_an_unreadable_manifest_refuses_every_environment(tmp_path):
     units = prepare(tmp_path, "A")
-    (paths.units_dir(tmp_path) / "x.json").write_text("{not json", encoding="utf-8")
+    (paths.units_dir(tmp_path) / "x.json").write_text("{not json")
     for pair in GOLDEN["pairs"]:
         unit_id, proc = pair.split(":")
         with pytest.raises(procs.EnvPolicyError, match="x.json"):
