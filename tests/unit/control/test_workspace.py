@@ -33,7 +33,7 @@ def serving(unit_id: str, port: int, **top: Any) -> dict[str, Any]:
 def workspace(home: Path, *roots: str, **extra: Any) -> None:
     paths.workspace_file(home).parent.mkdir(parents=True, exist_ok=True)
     body = {"roots": list(roots), **extra}
-    paths.workspace_file(home).write_text(json.dumps(body), encoding="utf-8")
+    paths.workspace_file(home).write_text(json.dumps(body))
     registry.forget()
 
 
@@ -42,17 +42,23 @@ def installed(site: Path, platform_version: str = PLATFORM_VERSION) -> None:
     info.mkdir(parents=True, exist_ok=True)
     (info / "METADATA").write_text(
         f"Metadata-Version: 2.1\nName: tbot-console\nVersion: {platform_version}\n",
-        encoding="utf-8",
     )
 
 
 def venv(base: Path, platform_version: str = PLATFORM_VERSION) -> Path:
     python = base / ".venv" / "bin" / "python"
     python.parent.mkdir(parents=True, exist_ok=True)
-    python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+    python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
     python.chmod(0o755)
-    installed(base / ".venv/lib/python3.14/site-packages", platform_version)
+    installed(base / ".venv/lib/python3.15/site-packages", platform_version)
     return python
+
+
+def exec_finished(pid: int, timeout: float = 5.0) -> int:
+    deadline = time.monotonic() + timeout
+    while Path(psutil.Process(pid).cmdline()[0]).name == "sh" and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return pid
 
 
 def refusal(found: registry.Registry) -> list[str]:
@@ -109,7 +115,7 @@ class TestDiscovery:
         "raw", ['{"roots": "x"}', "[]", "{not json", '{"roots": [1]}', '{"console_port": 80}']
     )
     def test_a_malformed_workspace_file_keeps_the_home(self, home, raw):
-        paths.workspace_file(home).write_text(raw, encoding="utf-8")
+        paths.workspace_file(home).write_text(raw)
         found = load_registry()
         assert [u.id for u in found.units] == ["console", "alpha"]
         assert found.broken[0].file == "config/workspace.json"
@@ -193,7 +199,7 @@ class TestRootProblems:
         write_manifest(windows, unit("beta"))
         python = windows / ".venv/Scripts/python.exe"
         python.parent.mkdir(parents=True)
-        python.write_text("", encoding="utf-8")
+        python.write_text("")
         installed(windows / ".venv/Lib/site-packages")
         workspace(home, str(windows))
         assert paths.python(windows) == python
@@ -277,8 +283,8 @@ class TestEnvironment:
         spec = unit("beta")
         spec["processes"]["main"]["env_files"] = [".env"]
         write_manifest(other, spec)
-        (home / ".env").write_text("HOME_SECRET=h\nALPHA_KNOB=1\n", encoding="utf-8")
-        (other / ".env").write_text("OTHER_SECRET=o\nALPHA_KNOB=2\n", encoding="utf-8")
+        (home / ".env").write_text("HOME_SECRET=h\nALPHA_KNOB=1\n")
+        (other / ".env").write_text("OTHER_SECRET=o\nALPHA_KNOB=2\n")
         workspace(home, str(other))
         found = load_registry()
         beta = found.get("beta")
@@ -290,7 +296,7 @@ class TestEnvironment:
         assert dropped == []
 
     def test_a_broken_manifest_blocks_only_its_own_folder(self, home, other):
-        (paths.units_dir(other) / "zz.json").write_text("{not json", encoding="utf-8")
+        (paths.units_dir(other) / "zz.json").write_text("{not json")
         workspace(home, str(other))
         found = load_registry()
         alpha, beta = found.get("alpha"), found.get("beta")
@@ -316,7 +322,7 @@ class TestInterpreter:
             procs.interpreter(bare)
 
     def test_console_scripts_come_from_the_units_own_venv(self, other):
-        site = other / ".venv/lib/python3.14/site-packages/demo-0.1.dist-info"
+        site = other / ".venv/lib/python3.15/site-packages/demo-0.1.dist-info"
         site.mkdir(parents=True)
         (site / "METADATA").write_text("Metadata-Version: 2.1\nName: demo\nVersion: 0.1\n")
         (site / "entry_points.txt").write_text("[console_scripts]\ndemo-live = beta.live:main\n")
@@ -328,7 +334,7 @@ class TestInterpreter:
 class TestProcesses:
     @pytest.fixture
     def fake(self, home, other, monkeypatch):
-        (other / "fakeunit.py").write_text(FAKE_UNIT, encoding="utf-8")
+        (other / "fakeunit.py").write_text(FAKE_UNIT)
         original = procs.child_env
 
         def with_path(base: Path, spec: UnitManifest, proc: str):
@@ -349,7 +355,7 @@ class TestProcesses:
         assert cli.main(["start", "beta"]) == ops.EXIT_OK
         assert f"запускаю {fake / '.venv/bin/python'} -m fakeunit" in capsys.readouterr().out
         record = read_object(paths.state_path(fake, "beta", "main"))
-        pid = record["pid"]
+        pid = exec_finished(record["pid"])
         assert procs.cwd_of(pid) == fake.resolve()
         assert (fake / "logs/units/beta.main.out").is_file()
         assert not paths.run_dir(home).exists() or not list(paths.run_dir(home).glob("beta.*"))
@@ -362,7 +368,7 @@ class TestProcesses:
         self, home, fake, monkeypatch
     ):
         assert cli.main(["start", "beta"]) == ops.EXIT_OK
-        pid = read_object(paths.state_path(fake, "beta", "main"))["pid"]
+        pid = exec_finished(read_object(paths.state_path(fake, "beta", "main"))["pid"])
         bystander = subprocess.Popen(["sleep", "30"])
         describe = psutil.Process.cmdline
 
@@ -406,10 +412,10 @@ class TestInterfaceFiles:
         write_manifest(other, unit("beta") | {"ui": "beta"})
         folder = paths.ui_dir(other, "beta")
         folder.mkdir(parents=True)
-        (folder / "index.js").write_text('import { h } from "../../dom.js";\n', encoding="utf-8")
-        (folder / "style.css").write_text(".beta { color: red; }\n", encoding="utf-8")
-        (folder / ".secret").write_text("x", encoding="utf-8")
-        (other / ".env").write_text("KEY=1\n", encoding="utf-8")
+        (folder / "index.js").write_text('import { h } from "../../dom.js";\n')
+        (folder / "style.css").write_text(".beta { color: red; }\n")
+        (folder / ".secret").write_text("x")
+        (other / ".env").write_text("KEY=1\n")
         (folder / "escape.js").symlink_to(other / ".env")
         workspace(home, str(other))
         return loopback_client(create_app())
@@ -455,12 +461,12 @@ class TestInterfaceFiles:
 class TestUiLinks:
     def test_links_point_at_the_installed_platform(self, root, capsys):
         (root / "js").mkdir()
-        (root / "js/util.js").write_text("old copy", encoding="utf-8")
+        (root / "js/util.js").write_text("old copy")
         assert cli.main(["ui-links"]) == 0
         for name in cli.UI_LINKS:
             assert (root / name).is_symlink(), name
             assert (root / name).resolve() == (STATIC_DIR / name).resolve()
-        assert (root / "js/util.js").read_text(encoding="utf-8") != "old copy"
+        assert (root / "js/util.js").read_text() != "old copy"
         assert "js/require-tests.mjs" in capsys.readouterr().out
 
     def test_a_second_run_replaces_the_links(self, root):
@@ -472,12 +478,12 @@ class TestUiLinks:
         if shutil.which("git") is None:
             pytest.skip("git is not installed")
         (root / "js").mkdir()
-        (root / "js/dom.js").write_text("own", encoding="utf-8")
+        (root / "js/dom.js").write_text("own")
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
         subprocess.run(["git", "add", "js/dom.js"], cwd=root, check=True)
         assert cli.main(["ui-links"]) == 2
         assert "js/dom.js" in capsys.readouterr().err
-        assert (root / "js/dom.js").read_text(encoding="utf-8") == "own"
+        assert (root / "js/dom.js").read_text() == "own"
         assert not (root / "js/api.js").exists()
 
     def test_files_are_copied_where_links_are_refused(self, root, monkeypatch):
@@ -518,7 +524,7 @@ class TestNodeGuard:
 
     def test_a_passing_test_keeps_the_run_green(self, tmp_path):
         (tmp_path / "one.test.js").write_text(
-            'import test from "node:test";\ntest("ok", () => {});\n', encoding="utf-8"
+            'import test from "node:test";\ntest("ok", () => {});\n'
         )
         result = self.run_node(tmp_path, "*.test.js")
         assert result.returncode == 0, result.stdout + result.stderr
@@ -526,7 +532,7 @@ class TestNodeGuard:
 
 @POSIX_ONLY
 def test_the_console_runs_an_operation_in_the_units_folder(home, other):
-    (other / "fakeunit.py").write_text(FAKE_UNIT, encoding="utf-8")
+    (other / "fakeunit.py").write_text(FAKE_UNIT)
     workspace(home, str(other))
     client = loopback_client(create_app())
     marked = {"X-Tbot-Console": "1"}
@@ -541,7 +547,7 @@ def test_the_console_runs_an_operation_in_the_units_folder(home, other):
             break
         time.sleep(0.2)
     assert op is not None and op["phase"] == "done", client.get(f"/api/control/ops/{op_id}").json()
-    log = paths.op_log_path(other, op_id).read_text(encoding="utf-8")
+    log = paths.op_log_path(other, op_id).read_text()
     assert f"запускаю {other / '.venv/bin/python'} -m fakeunit" in log
     pid = read_object(paths.state_path(other, "beta", "main"))["pid"]
     try:

@@ -48,10 +48,11 @@ The console's HTTP side of this package is `web/control_api.py` (see
 from tbot_console.control import ops, state
 from tbot_console.control.registry import load_registry
 
-registry = load_registry()                     # home = TBOT_ROOT or cwd, plus workspace roots
+registry = load_registry()  # home = TBOT_ROOT or cwd, plus workspace roots
 unit = registry.get("alpha")
-base = registry.base(unit)                     # the repo that claimed the unit
-view = state.process_view(base, unit, "bot")   # {"state": "running", "label": "работает", "pid": ..., "can": [...], ...}
+base = registry.base(unit)  # the repo that claimed the unit
+# view: {"state": "running", "label": "работает", "pid": ..., "can": [...], ...}
+view = state.process_view(base, unit, "bot")
 ops.Operation(base, unit, "bot", "restart", ops.new_op_id()).execute()
 ```
 

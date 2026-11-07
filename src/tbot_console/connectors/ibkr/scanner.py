@@ -125,26 +125,43 @@ class ScannerVocabulary:
     def unknowns(self, request: ScanRequest) -> tuple[str, ...]:
         if self.is_empty:
             return ()
-        complaints: list[str] = []
+        return (
+            *self._unknown_instrument(request),
+            *self._unknown_scan_code(request),
+            *self._unknown_location(request),
+            *self._unknown_filters(request),
+        )
+
+    def _unknown_instrument(self, request: ScanRequest) -> list[str]:
         if self.instruments and not self.knows_instrument(request.instrument):
-            complaints.append(f"instrument {request.instrument!r} is not one IBKR offers")
-        if self.scan_types and not self.knows_scan_code(request.scan_code):
-            complaints.append(f"scan code {request.scan_code!r} is not one IBKR offers")
-        elif self.scan_types and request.scan_code.upper() not in self.scan_codes_for(
-            request.instrument
-        ):
-            complaints.append(
+            return [f"instrument {request.instrument!r} is not one IBKR offers"]
+        return []
+
+    def _unknown_scan_code(self, request: ScanRequest) -> list[str]:
+        if not self.scan_types:
+            return []
+        if not self.knows_scan_code(request.scan_code):
+            return [f"scan code {request.scan_code!r} is not one IBKR offers"]
+        if request.scan_code.upper() not in self.scan_codes_for(request.instrument):
+            return [
                 f"scan code {request.scan_code!r} does not apply to instrument "
                 f"{request.instrument!r}"
-            )
+            ]
+        return []
+
+    def _unknown_location(self, request: ScanRequest) -> list[str]:
         if self.locations and not self.knows_location(request.location):
-            complaints.append(f"location {request.location!r} is not one IBKR offers")
-        complaints.extend(
+            return [f"location {request.location!r} is not one IBKR offers"]
+        return []
+
+    def _unknown_filters(self, request: ScanRequest) -> list[str]:
+        if not self.filters:
+            return []
+        return [
             f"filter tag {tag!r} is not one IBKR offers"
             for tag, _ in request.extra_filters
-            if self.filters and not self.knows_filter(tag)
-        )
-        return tuple(complaints)
+            if not self.knows_filter(tag)
+        ]
 
 
 def build_subscription(request: ScanRequest) -> ScannerSubscription:
@@ -216,41 +233,37 @@ def _parse_without_doctype(xml: str) -> ElementTree.Element:
         raise ScanRequestError(f"IBKR scanner parameters are not valid XML: {exc}") from exc
 
 
+def _catalogue[E: (ScanType, ScanLocation)](
+    root: ElementTree.Element, tag: str, code_tag: str, make: type[E]
+) -> tuple[E, ...]:
+    found: dict[str, E] = {}
+    for node in root.iter(tag):
+        code = _child_text(node, code_tag).upper()
+        if code and code not in found:
+            found[code] = make(
+                code=code,
+                display_name=_child_text(node, "displayName"),
+                instruments=_instruments_of(node),
+            )
+    return tuple(found[code] for code in sorted(found))
+
+
 def parse_scanner_parameters(xml: str) -> ScannerVocabulary:
     if not xml.strip():
         LOG.warning("IBKR returned empty scanner parameters")
         return ScannerVocabulary()
 
     root = _parse_without_doctype(xml)
-
-    scan_types: dict[str, ScanType] = {}
-    for node in root.iter("ScanType"):
-        code = _child_text(node, "scanCode").upper()
-        if code and code not in scan_types:
-            scan_types[code] = ScanType(
-                code=code,
-                display_name=_child_text(node, "displayName"),
-                instruments=_instruments_of(node),
-            )
-
-    locations: dict[str, ScanLocation] = {}
-    for node in root.iter("Location"):
-        code = _child_text(node, "locationCode").upper()
-        if code and code not in locations:
-            locations[code] = ScanLocation(
-                code=code,
-                display_name=_child_text(node, "displayName"),
-                instruments=_instruments_of(node),
-            )
-
+    scan_types = _catalogue(root, "ScanType", "scanCode", ScanType)
+    locations = _catalogue(root, "Location", "locationCode", ScanLocation)
     instruments = {
         text.upper() for node in root.iter("Instrument") if (text := _child_text(node, "type"))
     }
     filters = {text for node in root.iter("AbstractField") if (text := _child_text(node, "code"))}
 
     return ScannerVocabulary(
-        scan_types=tuple(scan_types[code] for code in sorted(scan_types)),
-        locations=tuple(locations[code] for code in sorted(locations)),
+        scan_types=scan_types,
+        locations=locations,
         instruments=tuple(sorted(instruments)),
         filters=tuple(sorted(filters)),
     )

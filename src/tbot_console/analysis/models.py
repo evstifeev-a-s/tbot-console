@@ -1,8 +1,8 @@
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Timeframe(str, Enum):
+class Timeframe(StrEnum):
     M1 = "1"
     M5 = "5"
     M15 = "15"
@@ -23,7 +23,7 @@ TIMEFRAME_SECONDS: dict[Timeframe, int] = {
 }
 
 
-class TrendType(str, Enum):
+class TrendType(StrEnum):
     UPTREND = "uptrend"
     DOWNTREND = "downtrend"
     SIDEWAYS = "sideways"

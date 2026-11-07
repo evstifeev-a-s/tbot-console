@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+lazy import fcntl
 
 from tbot_console.control import paths
 from tbot_console.control.files import read_object, write_json_atomic
@@ -16,7 +17,7 @@ LOG = logging.getLogger(__name__)
 
 LIVE_TRADING_ENV = "IBKR_ALLOW_LIVE_TRADING"
 Via = Literal["console", "cli"]
-VIA_NAMES: dict[str, str] = {"console": "в консоли", "cli": "командой tbot live"}
+VIA_NAMES = frozendict({"console": "в консоли", "cli": "командой tbot live"})
 RESTART_HINT = "переключатель изменён — перезапустите процесс, чтобы применить"
 
 
@@ -51,10 +52,8 @@ def enabled(home: Path, unit_id: str) -> bool:
 def _locked(home: Path) -> Iterator[None]:
     lock = paths.run_dir(home) / "live_trading.lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
-    with lock.open("a", encoding="utf-8") as handle:
+    with lock.open("a") as handle:
         if sys.platform != "win32":
-            import fcntl
-
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         yield
 
@@ -79,7 +78,7 @@ def _record(home: Path, unit_id: str, on: bool, via: Via) -> None:
     )
     log = paths.live_trading_log(home)
     log.parent.mkdir(parents=True, exist_ok=True)
-    with log.open("a", encoding="utf-8") as handle:
+    with log.open("a") as handle:
         handle.write(line + "\n")
         handle.flush()
         os.fsync(handle.fileno())

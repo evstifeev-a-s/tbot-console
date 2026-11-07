@@ -79,6 +79,19 @@ class TestUnits:
         assert alpha["status"] is None
         assert alpha["status_error"] == error
 
+    @pytest.mark.parametrize(
+        ("answer", "error", "reachable"),
+        [
+            (httpx.ReadError("reset by peer"), "ошибка связи со службой: reset by peer", None),
+            (httpx.Response(200, text="<html>"), "служба прислала сводку не в JSON", True),
+        ],
+    )
+    def test_a_broken_answer_is_described(self, console, services, answer, error, reachable):
+        services.answers["/api/alpha/status"] = answer
+        alpha = console.get("/api/control/units").json()["units"][1]
+        assert (alpha["status"], alpha["status_error"]) == (None, error)
+        assert alpha["api"]["reachable"] is reachable
+
     def test_a_malformed_status_is_not_passed_on(self, console, services):
         services.answers["/api/alpha/status"] = httpx.Response(200, json={"tone": "ok"})
         alpha = console.get("/api/control/units").json()["units"][1]
@@ -91,7 +104,7 @@ class TestUnits:
         assert beta["glyph"] == "BE"
 
     def test_a_broken_manifest_is_listed(self, console, root):
-        (root / "config/units/zz.json").write_text("[]", encoding="utf-8")
+        (root / "config/units/zz.json").write_text("[]")
         body = console.get("/api/control/units").json()
         assert body["broken"][0]["file"] == "config/units/zz.json"
 
@@ -115,7 +128,7 @@ class TestActions:
         def fake_spawn(argv, env, cwd, output):
             calls.append(argv)
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text("executor started\n", encoding="utf-8")
+            output.write_text("executor started\n")
             return Done()
 
         monkeypatch.setattr(procs, "spawn", fake_spawn)
@@ -173,7 +186,7 @@ class TestOutput:
     def test_the_tail_of_a_process_output(self, console, root):
         target = root / "logs/units/alpha.api.out"
         target.parent.mkdir(parents=True)
-        target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+        target.write_text("one\ntwo\nthree\n")
         body = console.get(
             "/api/control/units/alpha/processes/api/output", params={"lines": 2}
         ).json()
@@ -183,7 +196,7 @@ class TestOutput:
     def test_an_adopted_process_shows_the_file_it_writes(self, console, root):
         target = root / "logs/alpha_bot.out"
         target.parent.mkdir(parents=True)
-        target.write_text("bot line\n", encoding="utf-8")
+        target.write_text("bot line\n")
         write_json_atomic(
             paths.state_path(root, "alpha", "bot"),
             {"pid": None, "output": "logs/alpha_bot.out"},
@@ -227,7 +240,7 @@ class TestLiveTrading:
         assert alpha["processes"][1]["live_trading"] is None
         console.post(self.URL, json={"enabled": False}, headers=CONSOLE)
         assert not live.enabled(root, "alpha")
-        trail = paths.live_trading_log(root).read_text(encoding="utf-8").splitlines()
+        trail = paths.live_trading_log(root).read_text().splitlines()
         assert [line.rsplit(": ", 1)[1] for line in trail] == [
             "заявки разрешены на ЖИВОМ счёте (в консоли)",
             "заявки только на бумажный счёт (в консоли)",

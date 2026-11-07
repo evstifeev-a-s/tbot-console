@@ -31,7 +31,7 @@ extra.
 from tbot_console.connectors.ibkr import IBKRClient, IBKRConfig, IBKRInstrument
 from tbot_console.analysis.models import Timeframe
 
-async with IBKRClient(IBKRConfig.from_env()) as client:        # paper TWS on 127.0.0.1:7497
+async with IBKRClient(IBKRConfig.from_env()) as client:  # paper TWS on 127.0.0.1:7497
     spx = IBKRInstrument.parse("SPX-USD-IND@CBOE")
     chains = await client.fetch_option_chain(spx)
     bars = await client.fetch_bars(spx, Timeframe.D1, count=250)
@@ -144,10 +144,10 @@ from datetime import UTC, datetime, timedelta
 
 from tbot_console.connectors.ibkr import IBKRClient, IBKRConfig, IBKRInstrument
 
-async with IBKRClient(IBKRConfig.from_env()) as client:          # IBKR_MARKET_DATA_TYPE=1
-    nasdaq = IBKRInstrument.parse("AAPL-USD-STK@ISLAND")        # ISLAND: Nasdaq TotalView
-    book = await client.watch_depth(nasdaq, on_book, rows=10)    # on_book(DepthBook)
-    tape = await client.watch_tape(nasdaq, on_print)             # on_print(TapePrint)
+async with IBKRClient(IBKRConfig.from_env()) as client:  # IBKR_MARKET_DATA_TYPE=1
+    nasdaq = IBKRInstrument.parse("AAPL-USD-STK@ISLAND")  # ISLAND: Nasdaq TotalView
+    book = await client.watch_depth(nasdaq, on_book, rows=10)  # on_book(DepthBook)
+    tape = await client.watch_tape(nasdaq, on_print)  # on_print(TapePrint)
     last_hour = await client.fetch_ticks(nasdaq, datetime.now(UTC) - timedelta(hours=1))
     await client.stop_tape(tape)
 ```
@@ -218,14 +218,19 @@ async with IBKRClient(IBKRConfig.from_env()) as client:          # IBKR_MARKET_D
 from tbot_console.connectors.ibkr import IBKRConfig, IBKRInstrument, IBKRTrader, Target
 
 trader = IBKRTrader(IBKRConfig.from_env(), max_order_value=2_000, journal="state/orders.jsonl")
-async with trader:                                  # refuses a live account without the switch
-    print(trader.account_kind, trader.account)      # paper DU****567
-    trader.watch_orders(on_order)                   # on_order(OrderEvent)
+async with trader:  # refuses a live account without the switch
+    print(trader.account_kind, trader.account)  # paper DU****567
+    trader.watch_orders(on_order)  # on_order(OrderEvent)
     chain = await trader.place_bracket(
-        IBKRInstrument.parse("DEMO-USD-STK"), "buy", 300, 2.50, 2.30,
-        [Target(2.80, 180), Target(3.10, 120)], ref="signal-42",
+        IBKRInstrument.parse("DEMO-USD-STK"),
+        "buy",
+        300,
+        2.50,
+        2.30,
+        [Target(2.80, 180), Target(3.10, 120)],
+        ref="signal-42",
     )
-    await trader.modify(chain.of_role("stop")[1].order_id, stop=2.50)   # second part to breakeven
+    await trader.modify(chain.of_role("stop")[1].order_id, stop=2.50)  # second part to breakeven
     await trader.cancel_chain(chain.parent_id)
 ```
 

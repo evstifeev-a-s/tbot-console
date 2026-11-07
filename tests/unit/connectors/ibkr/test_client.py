@@ -94,6 +94,12 @@ class TestConnect:
             assert opened.is_connected
         assert not ib.connected
 
+    async def test_an_error_inside_the_context_still_disconnects(self, ib: FakeIB):
+        with pytest.raises(RuntimeError, match="boom"):
+            async with IBKRClient(IBKRConfig(), ib=ib):
+                raise RuntimeError("boom")
+        assert not ib.connected
+
 
 class TestQualify:
     async def test_maps_contract_details(self, client: IBKRClient):
@@ -192,6 +198,15 @@ class TestQuotes:
         assert quote is not None
         assert (quote.bid_size, quote.ask_size) == (0.0, 0.0)
 
+    async def test_a_fractional_size_is_kept(self, client: IBKRClient, ib: FakeIB):
+        contract = make_contract("AAPL", 265598)
+        ib.details = [make_details(contract)]
+        ib.tickers = [make_ticker(contract, bidSize=0.5, askSize=0.0)]
+
+        quote = await client.fetch_quote(AAPL)
+        assert quote is not None
+        assert (quote.bid_size, quote.ask_size) == (0.5, 0.0)
+
     async def test_mid_falls_back_to_last_then_close(self, client: IBKRClient, ib: FakeIB):
         contract = make_contract("AAPL", 265598)
         ib.details = [make_details(contract)]
@@ -241,6 +256,26 @@ class TestQuotes:
     async def test_empty_input(self, client: IBKRClient, ib: FakeIB):
         assert await client.fetch_quotes([]) == {}
         assert not ib.ticker_calls
+
+    async def test_nothing_ib_knows_asks_for_no_snapshot(
+        self, client: IBKRClient, ib: FakeIB, caplog: pytest.LogCaptureFixture
+    ):
+        ib.details = []
+        with caplog.at_level(logging.WARNING):
+            assert await client.fetch_quotes([AAPL, SPX_CALL]) == {}
+        assert not ib.ticker_calls
+        assert "IBKR quote skipped for AAPL-USD-STK" in caplog.text
+
+    async def test_a_contract_ib_sends_no_ticker_for_is_left_out(
+        self, client: IBKRClient, ib: FakeIB
+    ):
+        apple = make_contract("AAPL", 265598)
+        index = make_contract("SPX", 416904, sec_type="OPT", multiplier="100")
+        ib.details_by_symbol = {"AAPL": [make_details(apple)], "SPX": [make_details(index)]}
+        ib.tickers = [make_ticker(apple, bid=190.0)]
+        quotes = await client.fetch_quotes([SPX_CALL, AAPL])
+        assert list(quotes) == ["AAPL-USD-STK"] and quotes["AAPL-USD-STK"].bid == 190.0
+        assert ib.ticker_calls[0] == (index, apple)
 
     async def test_a_snapshot_ib_refused_is_skipped_not_reported_live(
         self, client: IBKRClient, ib: FakeIB, caplog: pytest.LogCaptureFixture

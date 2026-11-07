@@ -5,6 +5,7 @@ import signal
 import socket
 import subprocess
 import sys
+from collections.abc import Callable
 from importlib.metadata import EntryPoint, distributions, entry_points
 from operator import attrgetter
 from pathlib import Path
@@ -86,16 +87,7 @@ def file_env(base: Path, unit: UnitManifest, *files: Path) -> tuple[dict[str, st
     env: dict[str, str] = {}
     dropped: set[str] = set()
     for path in files:
-        if not path.is_file():
-            continue
-        try:
-            values = dotenv_values(path)
-        except (OSError, ValueError) as e:
-            raise EnvPolicyError(
-                f"{paths.relative(base, path)}: файл с ключами не читается ({e}). Сохраните его "
-                "в UTF-8 и проверьте права доступа: пока он не читается, процесс не запускается"
-            ) from e
-        for key, value in values.items():
+        for key, value in _env_values(base, path).items():
             if value is None:
                 continue
             name = key.upper()
@@ -104,6 +96,18 @@ def file_env(base: Path, unit: UnitManifest, *files: Path) -> tuple[dict[str, st
             elif only is None or only.admits(key):
                 env[key] = value
     return env, sorted(dropped)
+
+
+def _env_values(base: Path, path: Path) -> dict[str, str | None]:
+    if not path.is_file():
+        return {}
+    try:
+        return dotenv_values(path)
+    except (OSError, ValueError) as e:
+        raise EnvPolicyError(
+            f"{paths.relative(base, path)}: файл с ключами не читается ({e}). Сохраните его "
+            "в UTF-8 и проверьте права доступа: пока он не читается, процесс не запускается"
+        ) from e
 
 
 def child_env(base: Path, unit: UnitManifest, proc: str) -> tuple[dict[str, str], list[str]]:
@@ -213,14 +217,14 @@ def _start_mark(process: psutil.Process) -> float:
 def create_time(pid: int) -> float | None:
     try:
         return _wall_start(psutil.Process(pid))
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError:
         return None
 
 
 def start_mark(pid: int) -> float | None:
     try:
         return _start_mark(psutil.Process(pid))
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError:
         return None
 
 
@@ -234,7 +238,7 @@ def is_alive(pid: int | None, started: float | None, mark: float | None = None) 
         if mark is not None:
             return abs(_start_mark(process) - mark) <= CREATE_TIME_TOLERANCE
         created = _wall_start(process)
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError:
         return False
     return started is None or abs(created - started) <= CREATE_TIME_TOLERANCE
 
@@ -273,7 +277,7 @@ def kill(pid: int) -> None:
 def cmdline(pid: int) -> list[str]:
     try:
         return psutil.Process(pid).cmdline()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError:
         return []
 
 
@@ -288,14 +292,14 @@ def env_flag(pid: int, key: str) -> bool | None:
 def cwd_of(pid: int) -> Path | None:
     try:
         return Path(psutil.Process(pid).cwd()).resolve()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError, OSError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError, OSError:
         return None
 
 
 def stdout_path(pid: int) -> Path | None:
     try:
         files = psutil.Process(pid).open_files()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, ValueError:
         return None
     for item in files:
         if item.fd == 1:
@@ -350,36 +354,46 @@ def find_instances(base: Path, spec: ProcessSpec, exclude: set[int] | None = Non
     root = base.resolve()
     skipped = {os.getpid(), *(exclude or set())}
     scripts = console_scripts(spec.module, root)
-    found: list[int] = []
-    for process in psutil.process_iter():
-        if process.pid in skipped:
-            continue
-        try:
-            argv = process.cmdline()
-        except UNREADABLE:
-            continue
-        if not argv or "--check" in argv:
-            continue
-        if not Path(argv[0]).name.startswith("python"):
-            continue
-        if not runs_module(argv, spec.module, scripts):
-            continue
-        try:
-            cwd = process.cwd()
-        except UNREADABLE:
-            continue
-        if not cwd or not in_repo(Path(cwd).resolve(), root):
-            continue
-        if _env_compatible(process, spec.env):
-            found.append(process.pid)
-    return sorted(found)
+    return sorted(
+        process.pid
+        for process in psutil.process_iter()
+        if process.pid not in skipped and _is_instance(process, spec, root, scripts)
+    )
+
+
+def _is_instance(process: psutil.Process, spec: ProcessSpec, root: Path, scripts: set[str]) -> bool:
+    argv = _readable(process.cmdline)
+    if not argv or "--check" in argv or not Path(argv[0]).name.startswith("python"):
+        return False
+    if not runs_module(argv, spec.module, scripts):
+        return False
+    cwd = _readable(process.cwd)
+    if not cwd:
+        return False
+    return in_repo(Path(cwd).resolve(), root) and _env_compatible(process, spec.env)
+
+
+def _readable[T](read: Callable[[], T]) -> T | None:
+    try:
+        return read()
+    except UNREADABLE:
+        return None
 
 
 def port_holder(port: int) -> int | None:
+    if not _listened(port):
+        return None
+    holder = _lsof_listener(port)
+    return holder if holder is not None else _socket_table_listener(port)
+
+
+def _listened(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.3)
-        if probe.connect_ex(("127.0.0.1", port)) != 0:
-            return None
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _lsof_listener(port: int) -> int | None:
     try:
         found = subprocess.run(
             ["lsof", "-nP", f"-tiTCP:{port}", "-sTCP:LISTEN"],
@@ -388,24 +402,24 @@ def port_holder(port: int) -> int | None:
             timeout=5,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        found = None
-    if found is not None:
-        for line in found.stdout.split():
-            if line.isdigit():
-                return int(line)
+    except OSError, subprocess.TimeoutExpired:
+        return None
+    return next((int(line) for line in found.stdout.split() if line.isdigit()), None)
+
+
+def _socket_table_listener(port: int) -> int | None:
     try:
         for conn in psutil.net_connections(kind="inet"):
             if conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port:
                 return conn.pid
-    except (psutil.AccessDenied, OSError):
+    except psutil.AccessDenied, OSError:
         return None
     return None
 
 
 def lock_holder(lock: Path, module: str, base: Path | None = None) -> int | None:
     try:
-        raw = lock.read_text(encoding="utf-8").strip()
+        raw = lock.read_text().strip()
     except OSError:
         return None
     if not raw.isdigit():

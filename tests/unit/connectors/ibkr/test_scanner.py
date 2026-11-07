@@ -224,6 +224,18 @@ class TestParseParameters:
         assert len(vocabulary.scan_types) == 1
         assert vocabulary.scan_types[0].display_name == "First"
 
+    def test_locations_without_a_code_or_seen_before_are_skipped(self):
+        vocabulary = parse_scanner_parameters(
+            "<ScanParameterResponse>"
+            "<Location><displayName>No code</displayName></Location>"
+            "<Location><locationCode>STK.US</locationCode><displayName>First</displayName>"
+            "<instrument>stk, fut.us</instrument></Location>"
+            "<Location><locationCode>stk.us</locationCode><displayName>Second</displayName>"
+            "</Location>"
+            "</ScanParameterResponse>"
+        )
+        assert vocabulary.locations == (ScanLocation("STK.US", "First", ("STK", "FUT.US")),)
+
 
 class TestUnknowns:
     @pytest.fixture
@@ -262,6 +274,38 @@ class TestUnknowns:
 
     def test_empty_vocabulary_never_complains(self):
         assert ScannerVocabulary().unknowns(ScanRequest(scan_code="ANYTHING")) == ()
+
+    def test_every_unknown_part_is_named_in_order(self, vocabulary: ScannerVocabulary):
+        request = ScanRequest(
+            scan_code="NOPE",
+            instrument="BOND",
+            location="STK.MARS",
+            extra_filters=(("madeUpTag", "1"), ("priceAbove", "5"), ("alsoMadeUp", "2")),
+        )
+        assert vocabulary.unknowns(request) == (
+            "instrument 'BOND' is not one IBKR offers",
+            "scan code 'NOPE' is not one IBKR offers",
+            "location 'STK.MARS' is not one IBKR offers",
+            "filter tag 'madeUpTag' is not one IBKR offers",
+            "filter tag 'alsoMadeUp' is not one IBKR offers",
+        )
+        wrong = ScanRequest(scan_code="most_active", instrument="FUT.US", location="STK.US")
+        assert vocabulary.unknowns(wrong) == (
+            "scan code 'most_active' does not apply to instrument 'FUT.US'",
+        )
+
+    def test_only_the_parts_the_vocabulary_lists_are_checked(self):
+        request = ScanRequest(
+            scan_code="NOPE", instrument="BOND", location="X", extra_filters=(("tag", "1"),)
+        )
+        only_filters = ScannerVocabulary(filters=("priceAbove",))
+        assert only_filters.unknowns(request) == ("filter tag 'tag' is not one IBKR offers",)
+        only_locations = ScannerVocabulary(locations=(ScanLocation("STK.US", "", ()),))
+        assert only_locations.unknowns(request) == ("location 'X' is not one IBKR offers",)
+        only_scans = ScannerVocabulary(scan_types=(ScanType("NOPE", "", ("STK",)),))
+        assert only_scans.unknowns(request) == (
+            "scan code 'NOPE' does not apply to instrument 'BOND'",
+        )
 
 
 class TestSupports:

@@ -31,7 +31,7 @@ SWITCHES = {"IBKR_WRITABLE", LIVE_TRADING_ENV}
 def hand_start(tmp_path: Path) -> Iterator[Path]:
     shutil.copytree(FIXTURE_UNITS, paths.units_dir(tmp_path))
     text = "".join(f"{key}={value}\n" for key, value in ENV_FILE.items())
-    (tmp_path / ".env").write_text(text, encoding="utf-8")
+    (tmp_path / ".env").write_text(text)
     with patch.dict(os.environ):
         for key in (*ENV_FILE, procs.SUPERVISED_ENV):
             os.environ.pop(key, None)
@@ -69,7 +69,6 @@ def test_without_a_unit_the_env_file_is_loaded_except_the_trading_switches(hand_
 def test_a_trading_switch_spelled_in_lowercase_is_dropped_too(hand_start, unit):
     (hand_start / ".env").write_text(
         f"{LIVE_TRADING_ENV.lower()}=true\nibkr_writable=true\nALPHA_DRY_RUN=false\n",
-        encoding="utf-8",
     )
     procs.load_env_file(unit)
     assert not SWITCHES & {key.upper() for key in os.environ}
@@ -84,7 +83,7 @@ def test_a_missing_manifest_stops_the_start_before_reading_the_env_file(hand_sta
 
 def test_a_manifest_named_after_another_id_stops_the_start(hand_start):
     path = paths.units_dir(hand_start) / "beta.json"
-    path.write_text(path.read_text(encoding="utf-8").replace('"beta"', '"zeta"', 1), "utf-8")
+    path.write_text(path.read_text().replace('"beta"', '"zeta"', 1), "utf-8")
     with pytest.raises(SystemExit, match=r"beta\.json: имя файла .*\.env не загружен"):
         procs.load_env_file("beta")
     assert not {key for key in ENV_FILE if key in os.environ}
@@ -92,13 +91,13 @@ def test_a_manifest_named_after_another_id_stops_the_start(hand_start):
 
 def test_an_invalid_manifest_names_the_field(hand_start):
     path = paths.units_dir(hand_start) / "beta.json"
-    path.write_text(path.read_text(encoding="utf-8").replace('"BETA_"', '"beta"'), "utf-8")
+    path.write_text(path.read_text().replace('"BETA_"', '"beta"'), "utf-8")
     with pytest.raises(SystemExit, match=r"beta\.json: env_files_only\.prefixes\.0: .*не загружен"):
         procs.load_env_file("beta")
 
 
 def test_an_unreadable_neighbour_manifest_stops_the_start(hand_start):
-    (paths.units_dir(hand_start) / "x.json").write_text("{not json", encoding="utf-8")
+    (paths.units_dir(hand_start) / "x.json").write_text("{not json")
     with pytest.raises(SystemExit, match=r"x\.json.*\.env не загружен"):
         procs.load_env_file("beta")
     assert not {key for key in ENV_FILE if key in os.environ}

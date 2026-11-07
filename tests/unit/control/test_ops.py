@@ -129,7 +129,7 @@ def unit(
 
 @pytest.fixture
 def fake_root(root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    (root / "fakeunit.py").write_text(FAKE_UNIT, encoding="utf-8")
+    (root / "fakeunit.py").write_text(FAKE_UNIT)
     original = procs.child_env
 
     def with_path(base: Path, unit: UnitManifest, proc: str) -> tuple[dict[str, str], list[str]]:
@@ -149,7 +149,7 @@ def fake_root(root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _lock_written(lock: Path) -> bool:
     try:
-        return lock.read_text(encoding="utf-8").strip().isdigit()
+        return lock.read_text().strip().isdigit()
     except OSError:
         return False
 
@@ -224,7 +224,7 @@ class TestLifecycle:
         assert view(fake_root)["problem"] is None
 
     def test_starting_a_unit_starts_what_is_not_running_yet(self, fake_root):
-        (fake_root / "fakeunit2.py").write_text(FAKE_UNIT, encoding="utf-8")
+        (fake_root / "fakeunit2.py").write_text(FAKE_UNIT)
         manifest = unit()
         manifest["processes"]["two"] = {**manifest["processes"]["main"], "module": "fakeunit2"}
         write_manifest(fake_root, manifest)
@@ -295,7 +295,7 @@ class TestLifecycle:
         write_manifest(fake_root, unit())
         assert run(fake_root, "start")[0] == ops.EXIT_OK
         pid = view(fake_root)["pid"]
-        (paths.units_dir(fake_root) / "x.json").write_text("{not json", encoding="utf-8")
+        (paths.units_dir(fake_root) / "x.json").write_text("{not json")
         code, lines = run(fake_root, "restart")
         assert code == ops.EXIT_FAILED
         assert "config/units/x.json" in lines[-1]
@@ -557,7 +557,6 @@ class TestEnvironment:
             "SERVICE_CLIENT_ID=abc\nALPHA_DRY_RUN=false\nBETA_POLL=1\nDEMO_MODE=x\n"
             "IBKR_ALLOW_LIVE_TRADING=1\nALPHA_WEB_TOKEN=old\nTBOT_WEB_TOKEN=t0ken\n"
             "TBOT_WEB_HOST=0.0.0.0\n",
-            encoding="utf-8",
         )
         monkeypatch.setenv("ALPHA_SPOT", "X")
         monkeypatch.setenv("UNRELATED_KEY", "x")
@@ -585,7 +584,7 @@ class TestEnvironment:
 
     def test_an_unreadable_manifest_fails_the_start_in_plain_words(self, root):
         write_manifest(root, unit())
-        (paths.units_dir(root) / "x.json").write_text("{not json", encoding="utf-8")
+        (paths.units_dir(root) / "x.json").write_text("{not json")
         code, lines = run(root, "start")
         assert code == ops.EXIT_FAILED
         assert "config/units/x.json" in lines[-1]
@@ -598,7 +597,7 @@ class TestEnvironment:
         assert env["TBOT_PORT"] == "8555"
 
     def test_a_supervised_service_does_not_reread_the_env_file(self, root, monkeypatch):
-        (root / ".env").write_text("ALPHA_DRY_RUN=false\n", encoding="utf-8")
+        (root / ".env").write_text("ALPHA_DRY_RUN=false\n")
         monkeypatch.chdir(root)
         monkeypatch.delenv("ALPHA_DRY_RUN", raising=False)
         monkeypatch.setenv("TBOT_UNIT", "demo")
@@ -609,7 +608,7 @@ class TestEnvironment:
         assert os.environ.pop("ALPHA_DRY_RUN") == "false"
 
     def test_a_hand_start_never_reads_a_parent_folders_env_file(self, tmp_path, monkeypatch):
-        (tmp_path / ".env").write_text("TBOT_PARENT_KEY=leaked\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("TBOT_PARENT_KEY=leaked\n")
         checkout = tmp_path / "worktree"
         checkout.mkdir()
         monkeypatch.chdir(checkout)

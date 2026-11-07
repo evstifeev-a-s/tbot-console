@@ -30,6 +30,14 @@ class TestManifest:
         assert unit.listen_port("bot") is None
         assert unit.output_path("bot") == "logs/units/alpha.bot.out"
 
+    def test_only_an_http_ready_check_has_an_endpoint_and_only_the_service_a_health_path(self):
+        data = fixture_manifest("alpha")
+        data["processes"]["api"]["ready"] = {"kind": "alive"}
+        assert parse(data).ready_endpoint("api") is None
+        data = fixture_manifest("alpha")
+        data["processes"]["bot"]["ready"] = {"kind": "http", "port": 18700}
+        assert parse(data).ready_endpoint("bot") == (18700, "/")
+
     def test_only_the_consoles_own_names_are_reserved(self):
         assert {
             "control",
@@ -255,7 +263,7 @@ class TestRegistry:
 
     def test_a_broken_file_does_not_hide_the_others(self, root):
         write_manifest(root, fixture_manifest("alpha"))
-        (root / "config/units/bad.json").write_text("{not json", encoding="utf-8")
+        (root / "config/units/bad.json").write_text("{not json")
         found = load_registry(root)
         assert [unit.id for unit in found.units] == ["console", "alpha"]
         assert found.broken[0].file == "config/units/bad.json"
@@ -332,3 +340,17 @@ def test_the_processes_page_stays_reserved():
     route = (REPO_ROOT / "src/tbot_console/web/static/js/shell/route.js").read_text()
     processes = re.search(r'PROCESSES_PAGE = "([a-z]+)"', route)
     assert processes is not None and processes.group(1) in RESERVED_IDS
+
+
+def test_the_first_broken_rule_is_the_one_reported():
+    data = fixture_manifest("alpha", id="api", legacy_pages=["api"])
+    data["processes"]["bot"]["check"] = False
+    with pytest.raises(ValidationError, match="имя «api» занято консолью"):
+        parse(data)
+    data["id"] = "beta"
+    data["legacy_pages"] = ["beta"]
+    with pytest.raises(ValidationError, match="legacy_pages не может содержать"):
+        parse(data)
+    data["legacy_pages"] = []
+    with pytest.raises(ValidationError, match="check=true для bot"):
+        parse(data)

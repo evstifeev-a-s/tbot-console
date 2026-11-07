@@ -10,8 +10,8 @@ from typing import Any
 import pytest
 from ib_async import Contract
 from ib_async.ib import StartupFetchALL
-from ib_async.objects import AccountValue, Position
-from ib_async.order import Order, OrderState, Trade
+from ib_async.objects import AccountValue, CommissionReport, Execution, Fill, Position
+from ib_async.order import Order, OrderState, OrderStatus, Trade
 from ib_async.util import UNSET_DOUBLE
 
 from tbot_console.connectors.ibkr import trader as trader_module
@@ -26,12 +26,15 @@ from tbot_console.connectors.ibkr.models import (
     Target,
 )
 from tbot_console.connectors.ibkr.orders import (
+    BracketPlan,
     LiveAccountError,
     OrderCheckError,
     OrderRejectedError,
+    Portion,
     account_kind,
     mask_account,
     parse_number,
+    plan_bracket,
     price_step,
 )
 from tbot_console.connectors.ibkr.trader import IBKRTrader
@@ -41,7 +44,7 @@ from tbot_console.core.exceptions import (
     ExchangeRequestError,
 )
 
-from .conftest import FakeIB, make_contract, make_details
+from .conftest import MOMENT, FakeIB, make_contract, make_details
 from .test_client import answer_in_turn
 
 DEMO = IBKRInstrument.parse("DEMO-USD-STK")
@@ -85,6 +88,15 @@ def events_of(path: Path, event: str) -> list[dict[str, Any]]:
     return [record for record in read_journal(path) if record["event"] == event]
 
 
+def journal_text(path: Path) -> str:
+    return path.read_text()
+
+
+def tear_journal(path: Path) -> None:
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'{"event": "status", "at": 1.0}\n{"event": "sta')
+
+
 def by_id(ib: FakeIB, order_id: int) -> Trade:
     return ib.own_trades[order_id]
 
@@ -106,7 +118,7 @@ class TestAccountLock:
         assert ib.connect_kwargs["clientId"] == CLIENT_ID
         (connect,) = events_of(journal, "connect")
         assert connect["account"] == "DU****567" and connect["kind"] == "paper"
-        assert ACCOUNT not in journal.read_text(encoding="utf-8")
+        assert ACCOUNT not in journal_text(journal)
 
     async def test_a_live_account_without_the_switch_is_refused_and_disconnected(
         self, ib: FakeIB, journal: Path
@@ -367,6 +379,27 @@ class TestChecksBeforeSending:
         with pytest.raises(OrderCheckError, match="at or above the stop"):
             await trader.place_bracket(DEMO, "sell", 10, 2.5, 2.7, stop_limit=2.65, ref="s")
 
+    async def test_the_sides_are_strict_but_a_stop_limit_may_equal_its_stop(
+        self, trader: IBKRTrader
+    ):
+        for side, stop, targets, message in [
+            ("buy", 2.5, [], "a buy's stop must be below its entry: stop 2.5, entry 2.5"),
+            ("sell", 2.5, [], "a sell's stop must be above its entry: stop 2.5, entry 2.5"),
+            ("buy", 2.3, [(2.8, 5), (2.5, 5)], "above its entry: target 2 2.5, entry 2.5"),
+            ("sell", 2.7, [(2.2, 5), (2.5, 5)], "below its entry: target 2 2.5, entry 2.5"),
+        ]:
+            with pytest.raises(OrderCheckError, match=message):
+                await trader.place_bracket(DEMO, side, 10, 2.5, stop, targets, ref="edge")
+        long = await trader.place_bracket(DEMO, "buy", 10, 2.5, 2.3, stop_limit=2.3, ref="l")
+        short = await trader.place_bracket(DEMO, "sell", 10, 2.5, 2.7, stop_limit=2.7, ref="s")
+        assert (long.legs[-1].limit_price, short.legs[-1].limit_price) == (2.3, 2.7)
+
+    def test_a_plan_is_for_regular_hours_unless_told_otherwise(self):
+        plan = plan_bracket("buy", 10, 2.5, 2.3, [], max_order_value=100)
+        assert plan == BracketPlan("buy", 10, 2.5, 2.3, None, (Portion(10, None),))
+        with pytest.raises(OrderCheckError, match="does not trigger a market stop"):
+            plan_bracket("buy", 10, 2.5, 2.3, [], outside_rth=True, max_order_value=100)
+
     async def test_only_stocks_are_traded(self, trader: IBKRTrader, ib: FakeIB):
         with pytest.raises(OrderCheckError, match="stock orders \\(STK\\) only; OPT"):
             await trader.place_limit(OPTION, "buy", 1, 1.0, ref="opt")
@@ -604,6 +637,159 @@ class TestModifyAndCancel:
         assert not any("global" in name for name in dir(IBKRTrader))
 
 
+class TestChanges:
+    async def test_the_first_failing_check_names_the_refusal(self, trader: IBKRTrader, ib: FakeIB):
+        chain = await trader.place_bracket(
+            DEMO, "buy", 100, 2.5, 2.3, [(2.8, 60)], stop_limit=2.25, ref="order"
+        )
+        entry, target, stop = (leg.order_id for leg in chain.legs[:3])
+        sent = len(ib.placed)
+        for order_id, change, message in [
+            (target, {"price": -1.0, "stop": -1.0, "shares": 0}, "has no stop price"),
+            (stop, {"price": -1.0, "stop": -1.0, "shares": 0}, "price must be a finite price"),
+            (stop, {"stop": -1.0, "shares": 0}, "stop must be a finite price"),
+            (target, {"price": 2.905, "shares": 0}, "shares must be a whole number"),
+            (entry, {"price": 2.505, "shares": 10_000}, "price 2.505 is off the price step"),
+            (stop, {"price": 2.35, "shares": 61}, "would be better than its stop"),
+            (entry, {"price": 60.0, "shares": 100}, "above the 5,000.00 limit"),
+        ]:
+            with pytest.raises(OrderCheckError, match=message):
+                await trader.modify(order_id, **change)
+        ib.fill(entry, 30, 2.5)
+        with pytest.raises(OrderCheckError, match="30 shares filled already"):
+            await trader.modify(entry, price=2.505, shares=30)
+        assert len(ib.placed) == sent
+
+    async def test_a_stop_limit_may_end_level_with_its_stop(self, trader: IBKRTrader):
+        long = await trader.place_bracket(DEMO, "buy", 10, 2.5, 2.3, stop_limit=2.25, ref="long")
+        level = await trader.modify(long.legs[-1].order_id, stop=2.25)
+        assert (level.stop_price, level.limit_price) == (2.25, 2.25)
+        with pytest.raises(OrderCheckError, match="limit 2.3 of stop order .* its stop 2.25"):
+            await trader.modify(long.legs[-1].order_id, price=2.3)
+        short = await trader.place_bracket(DEMO, "sell", 10, 2.5, 2.7, stop_limit=2.75, ref="short")
+        level = await trader.modify(short.legs[-1].order_id, stop=2.75)
+        assert (level.stop_price, level.limit_price) == (2.75, 2.75)
+        with pytest.raises(OrderCheckError, match="limit 2.75 of stop order .* its stop 2.8"):
+            await trader.modify(short.legs[-1].order_id, stop=2.8)
+
+    async def test_only_an_entry_is_held_to_the_order_value_limit(
+        self, trader: IBKRTrader, ib: FakeIB
+    ):
+        chain = await two_target_chain(trader)
+        entry, target = chain.legs[0].order_id, chain.legs[1].order_id
+        with pytest.raises(OrderCheckError, match="order value 60 × 90 = 5,400.00 is above"):
+            await trader.modify(entry, price=90.0)
+        assert (await trader.modify(target, price=90.0)).limit_price == 90.0
+        grown = await trader.modify(entry, shares=80)
+        assert grown.shares == 80 and ib.placed[-1].totalQuantity == 80
+
+    async def test_a_shrunk_child_may_grow_back_to_its_entry(self, trader: IBKRTrader):
+        chain = await two_target_chain(trader)
+        stop_1 = chain.legs[2].order_id
+        assert (await trader.modify(stop_1, shares=50)).shares == 50
+        assert (await trader.modify(stop_1, shares=60)).shares == 60
+        with pytest.raises(OrderCheckError, match="may cover at most 60 shares, got 61"):
+            await trader.modify(stop_1, shares=61)
+
+    async def test_a_child_whose_entry_is_gone_is_capped_at_its_own_size(
+        self, trader: IBKRTrader, ib: FakeIB
+    ):
+        chain = await two_target_chain(trader)
+        entry_1, stop_1 = chain.legs[0].order_id, chain.legs[2].order_id
+        del ib.own_trades[entry_1]
+        assert (await trader.modify(stop_1, shares=50)).shares == 50
+        with pytest.raises(
+            OrderCheckError, match=f"stop of entry {entry_1}: it may cover at most 50 shares"
+        ):
+            await trader.modify(stop_1, shares=60)
+
+    async def test_a_new_price_is_snapped_to_the_price_step(self, trader: IBKRTrader, ib: FakeIB):
+        chain = await two_target_chain(trader)
+        target, stop = chain.legs[1].order_id, chain.legs[2].order_id
+        await trader.modify(target, price=2.900000001)
+        await trader.modify(stop, stop=2.200000001, shares=50)
+        assert ib.placed[-2].lmtPrice == 2.9
+        assert (ib.placed[-1].auxPrice, ib.placed[-1].totalQuantity) == (2.2, 50)
+
+    async def test_an_order_on_a_contract_outside_the_grammar_skips_the_step_check(
+        self, trader: IBKRTrader, ib: FakeIB
+    ):
+        bond = Contract(secType="BOND", conId=9001, symbol="DEMO", currency="USD")
+        order = Order(
+            orderId=900,
+            clientId=CLIENT_ID,
+            action="BUY",
+            totalQuantity=10,
+            orderType="LMT",
+            lmtPrice=2.5,
+            orderRef="bond",
+        )
+        ib.own_trades[900] = Trade(bond, order, OrderStatus(orderId=900, status="Submitted"))
+        moved = await trader.modify(900, price=2.505)
+        assert moved.limit_price == 2.505 and ib.placed[-1].lmtPrice == 2.505
+        assert ib.detail_calls == []
+
+    async def test_a_change_waits_for_the_status_of_its_own_order(
+        self, trader: IBKRTrader, ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+    ):
+        chain = await two_target_chain(trader)
+        target, other = chain.legs[1].order_id, chain.legs[4].order_id
+        refusal = (201, "Order rejected - reason: the price is out of range")
+
+        def another_status_first(trade: Trade, order: Order) -> Trade:
+            ib.orderStatusEvent.emit(by_id(ib, other))
+            asyncio.get_running_loop().call_soon(ib.fail, trade, *refusal)
+            return trade
+
+        monkeypatch.setattr(ib, "_modify", another_status_first)
+        with pytest.raises(ExchangeRequestError, match="out of range") as refused:
+            await trader.modify(target, price=2.9)
+        assert refused.value.code == 201
+        assert by_id(ib, target).orderStatus.status == "PreSubmitted"
+
+    async def test_a_change_ignores_other_requests_errors_and_notices(
+        self, trader: IBKRTrader, ib: FakeIB, monkeypatch: pytest.MonkeyPatch
+    ):
+        placed = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="m")
+        modify = ib._modify
+
+        def noisy(trade: Trade, order: Order) -> Trade:
+            ib.errorEvent.emit(31337, 200, "No security definition", None)
+            ib.errorEvent.emit(order.orderId, 2109, "Outside Regular Trading Hours", trade.contract)
+            return modify(trade, order)
+
+        monkeypatch.setattr(ib, "_modify", noisy)
+        assert (await trader.modify(placed.order_id, price=2.4)).limit_price == 2.4
+
+    async def test_a_change_answered_with_202_leaves_the_order_cancelled(
+        self, trader: IBKRTrader, ib: FakeIB
+    ):
+        events: list[OrderEvent] = []
+        trader.watch_orders(events.append)
+        placed = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="gone")
+        ib.modify_refusal = (202, "Order Canceled - reason: the exchange cancelled it")
+        with pytest.raises(ExchangeRequestError, match="exchange cancelled it") as refused:
+            await trader.modify(placed.order_id, price=2.4)
+        assert refused.value.code == 202
+        assert by_id(ib, placed.order_id).orderStatus.status == "Cancelled"
+        assert [(e.kind, e.code) for e in events] == [("accepted", None), ("cancelled", 202)]
+
+    async def test_a_change_leaves_no_listener_behind(
+        self, ib: FakeIB, journal: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        quick = build(ib, journal, timeout=0.05)
+        await quick.connect()
+        placed = await quick.place_limit(DEMO, "buy", 10, 2.5, ref="m")
+        listeners = (len(ib.orderStatusEvent), len(ib.errorEvent))
+        await quick.modify(placed.order_id, price=2.4)
+        ib.modify_refusal = (201, "Order rejected - reason: the price is out of range")
+        with pytest.raises(ExchangeRequestError):
+            await quick.modify(placed.order_id, price=2.3)
+        monkeypatch.setattr(ib, "_modify", lambda trade, order: trade)
+        await quick.modify(placed.order_id, price=2.3)
+        assert (len(ib.orderStatusEvent), len(ib.errorEvent)) == listeners
+
+
 class TestEvents:
     async def test_events_carry_size_price_ref_and_reason(self, trader: IBKRTrader, ib: FakeIB):
         events: list[OrderEvent] = []
@@ -655,6 +841,126 @@ class TestEvents:
         ib.errorEvent.emit(-1, 2104, "Market data farm connection is OK", None)
         ib.errorEvent.emit(31337, 200, "No security definition", None)
         assert events == []
+
+
+class TestEventKinds:
+    async def test_status_records_carry_what_ib_reported(
+        self, trader: IBKRTrader, ib: FakeIB, journal: Path
+    ):
+        placed = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="rec")
+        await trader.modify(placed.order_id, price=2.4)
+        held = "Order Message: Warning: held until the open"
+        ib.fail(by_id(ib, placed.order_id), 399, held, warning=True)
+        ib.fill(placed.order_id, 10, 2.4)
+        statuses = [r for r in events_of(journal, "status") if r["order_id"] == placed.order_id]
+        assert [(r["status"], r["avg_price"], r["code"], r["reason"]) for r in statuses] == [
+            ("Submitted", None, None, ""),
+            ("Submitted", None, None, ""),
+            ("ValidationError", None, 399, held),
+            ("Filled", 2.4, None, ""),
+        ]
+
+    async def test_a_status_ahead_of_the_perm_id_reads_it_from_the_status(
+        self, ib: FakeIB, journal: Path
+    ):
+        quick = build(ib, journal, timeout=0.05)
+        await quick.connect()
+        events: list[OrderEvent] = []
+        quick.watch_orders(events.append)
+        ib.answer_orders = False
+        placed = await quick.place_limit(DEMO, "buy", 10, 2.5, ref="perm")
+        ib.set_status(by_id(ib, placed.order_id), "Submitted", permId=4242)
+        (record,) = [r for r in events_of(journal, "status") if r["order_id"] == placed.order_id]
+        assert record["perm_id"] == 4242
+        assert [(e.kind, e.perm_id) for e in events] == [("accepted", 4242)]
+
+    async def test_orders_of_other_clients_are_not_reported(
+        self, trader: IBKRTrader, ib: FakeIB, journal: Path
+    ):
+        events: list[OrderEvent] = []
+        trader.watch_orders(events.append)
+        theirs = Order(orderId=7, clientId=5, action="BUY", totalQuantity=1, orderType="LMT")
+        trade = Trade(make_contract("DEMO", 4391), theirs)
+        ib.open_trades = [trade]
+        ib.set_status(trade, "Submitted")
+        execution = Execution(
+            execId="0002.1", time=MOMENT, side="BOT", shares=1, price=2.5, clientId=5, orderId=7
+        )
+        ib.execDetailsEvent.emit(trade, Fill(trade.contract, execution, CommissionReport(), MOMENT))
+        ib.errorEvent.emit(7, 201, "Order rejected - reason: margin", trade.contract)
+        assert events == []
+        assert [record["event"] for record in read_journal(journal)] == ["connect"]
+
+    async def test_a_cancellation_reads_as_rejected_or_cancelled_by_its_code(
+        self, ib: FakeIB, journal: Path
+    ):
+        quick = build(ib, journal, timeout=0.05)
+        await quick.connect()
+        events: list[OrderEvent] = []
+        quick.watch_orders(events.append)
+        first = (await quick.place_limit(DEMO, "buy", 10, 2.5, ref="first")).order_id
+        second = (await quick.place_limit(DEMO, "buy", 10, 2.5, ref="second")).order_id
+        ib.fail(by_id(ib, first), 201, "Order rejected - reason: margin")
+        ib.fail(by_id(ib, second), 110, "The price does not conform to the minimum price variation")
+        unknown = "The security is not available or allowed for this account"
+        ib.reject_when = [(lambda o: o.orderRef == "refused", 203, unknown)]
+        with pytest.raises(OrderRejectedError):
+            await quick.place_limit(DEMO, "buy", 10, 2.5, ref="refused")
+        refused = ib.placed[-1].orderId
+        ib.answer_orders = False
+        quiet = (await quick.place_limit(DEMO, "buy", 10, 2.5, ref="quiet")).order_id
+        ib.set_status(by_id(ib, quiet), "Cancelled")
+        assert [(e.kind, e.order_id, e.code) for e in events if e.kind != "accepted"] == [
+            ("rejected", first, 201),
+            ("cancelled", second, 110),
+            ("rejected", refused, 203),
+            ("cancelled", quiet, None),
+        ]
+
+    async def test_a_fill_ib_reports_by_status_first_is_partial(
+        self, trader: IBKRTrader, ib: FakeIB
+    ):
+        events: list[OrderEvent] = []
+        trader.watch_orders(events.append)
+        placed = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="ahead")
+        ib.set_status(by_id(ib, placed.order_id), "Submitted", filled=1, remaining=9)
+        assert [(e.kind, e.filled, e.remaining) for e in events] == [
+            ("accepted", 0, 10),
+            ("partial", 1, 9),
+        ]
+
+    async def test_a_partly_filled_order_may_be_cancelled_a_filled_one_not(
+        self, trader: IBKRTrader, ib: FakeIB
+    ):
+        events: list[OrderEvent] = []
+        trader.watch_orders(events.append)
+        partly = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="partly")
+        ib.fill(partly.order_id, 4, 2.5)
+        await trader.cancel(partly.order_id)
+        whole = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="whole")
+        ib.fill(whole.order_id, 10, 2.5)
+        ib.set_status(by_id(ib, whole.order_id), "Cancelled")
+        assert [(e.kind, e.order_id) for e in events if e.kind != "accepted"] == [
+            ("partial", partly.order_id),
+            ("cancelled", partly.order_id),
+            ("filled", whole.order_id),
+        ]
+
+    async def test_a_failing_watcher_is_logged_with_the_ref_or_the_order_id(
+        self, trader: IBKRTrader, ib: FakeIB, caplog
+    ):
+        def broken(event: OrderEvent) -> None:
+            raise RuntimeError("boom")
+
+        trader.watch_orders(broken)
+        bare = Order(orderId=900, clientId=CLIENT_ID, action="BUY", totalQuantity=10)
+        trade = Trade(make_contract("DEMO", 4391), bare)
+        ib.own_trades[900] = trade
+        with caplog.at_level(logging.ERROR):
+            await trader.place_limit(DEMO, "buy", 10, 2.5, ref="w")
+            ib.set_status(trade, "Submitted")
+        assert "IBKR order callback failed for w" in caplog.text
+        assert "IBKR order callback failed for 900" in caplog.text
 
 
 class TestPositionsAndWhatIf:
@@ -734,13 +1040,12 @@ class TestJournal:
         assert (fill["shares"], fill["price"], fill["ref"]) == (60, 2.5, "sig-1")
         assert all(isinstance(r["at"], float) for r in records)
         assert {r.get("account") for r in records if "account" in r} == {"DU****567"}
-        assert ACCOUNT not in journal.read_text(encoding="utf-8")
+        assert ACCOUNT not in journal_text(journal)
 
     async def test_a_torn_line_never_breaks_reading(
         self, ib: FakeIB, journal: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        journal.parent.mkdir(parents=True)
-        journal.write_bytes(b'{"event": "status", "at": 1.0}\n{"event": "sta')
+        tear_journal(journal)
         synced: list[int] = []
         real = os.fsync
 
@@ -886,6 +1191,25 @@ class TestEdges:
             assert trader.account_kind == "paper"
             assert trader.max_order_value == 5_000 and trader.journal_path == journal
         assert not ib.connected and trader.account is None
+
+    async def test_an_error_inside_the_context_still_disconnects(self, ib: FakeIB, journal: Path):
+        with pytest.raises(RuntimeError, match="boom"):
+            async with build(ib, journal) as trader:
+                raise RuntimeError("boom")
+        assert not ib.connected and trader.account is None
+
+    async def test_a_reconnect_reports_each_status_once(
+        self, trader: IBKRTrader, ib: FakeIB, journal: Path
+    ):
+        events: list[OrderEvent] = []
+        trader.watch_orders(events.append)
+        await trader.disconnect()
+        await trader.connect()
+        placed = await trader.place_limit(DEMO, "buy", 10, 2.5, ref="again")
+        ib.fail(by_id(ib, placed.order_id), 399, "Order Message: Warning: held", warning=True)
+        assert [(e.kind, e.code) for e in events] == [("accepted", None), ("notice", 399)]
+        statuses = [r for r in events_of(journal, "status") if r["order_id"] == placed.order_id]
+        assert [r["status"] for r in statuses] == ["Submitted", "ValidationError"]
 
     def test_ib_numbers_read_as_floats_or_none(self):
         assert parse_number("1250.5") == 1250.5

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class SecType(str, Enum):
+class SecType(StrEnum):
     STK = "STK"
     IND = "IND"
     CASH = "CASH"
@@ -51,6 +51,39 @@ def _validate_expiry(expiry: str, owner: str) -> None:
         raise InstrumentSyntaxError(f"{owner}: expiry {expiry!r} must be YYYYMM or YYYYMMDD")
 
 
+def _route(text: str, exchange: str) -> tuple[str, str]:
+    if ROUTE_SEPARATOR not in text:
+        return text, exchange
+    head, _, suffix = text.partition(ROUTE_SEPARATOR)
+    return head, suffix.strip() or exchange
+
+
+def _sec_type_of(text: str, normalized: str) -> SecType:
+    try:
+        return SecType(text)
+    except ValueError:
+        known = ", ".join(s.value for s in SecType)
+        raise InstrumentSyntaxError(
+            f"{normalized!r}: unknown security type {text!r}; expected one of {known}"
+        ) from None
+
+
+def _tail_fields(sec_type: SecType, tail: list[str], normalized: str) -> tuple[str, float, str]:
+    if sec_type in STRIKED:
+        if len(tail) != 3:
+            raise InstrumentSyntaxError(
+                f"{normalized!r}: {sec_type.value} needs EXPIRY-STRIKE-RIGHT"
+            )
+        return tail[0], _parse_strike(tail[1], normalized), tail[2]
+    if sec_type in DATED:
+        if len(tail) != 1:
+            raise InstrumentSyntaxError(f"{normalized!r}: {sec_type.value} needs EXPIRY")
+        return tail[0], 0.0, ""
+    if tail:
+        raise InstrumentSyntaxError(f"{normalized!r}: {sec_type.value} takes no trailing fields")
+    return "", 0.0, ""
+
+
 @dataclass(frozen=True, slots=True)
 class IBKRInstrument:
     sec_type: SecType
@@ -68,7 +101,10 @@ class IBKRInstrument:
             raise InstrumentSyntaxError("symbol must not be empty")
         if not self.currency:
             raise InstrumentSyntaxError(f"{self.symbol}: currency must not be empty")
+        self._check_expiry()
+        self._check_strike()
 
+    def _check_expiry(self) -> None:
         if self.sec_type in DATED:
             _validate_expiry(self.expiry, self.symbol)
         elif self.expiry:
@@ -76,6 +112,7 @@ class IBKRInstrument:
                 f"{self.symbol}: {self.sec_type.value} carries no expiry, got {self.expiry!r}"
             )
 
+    def _check_strike(self) -> None:
         if self.sec_type in STRIKED:
             if self.strike <= 0:
                 raise InstrumentSyntaxError(f"{self.symbol}: option needs a positive strike")
@@ -114,43 +151,14 @@ class IBKRInstrument:
 
     @classmethod
     def parse(cls, normalized: str, exchange: str = "") -> IBKRInstrument:
-        text = normalized.strip().upper()
-        routed = exchange
-        if ROUTE_SEPARATOR in text:
-            text, _, suffix = text.partition(ROUTE_SEPARATOR)
-            routed = suffix.strip() or exchange
-
+        text, routed = _route(normalized.strip().upper(), exchange)
         parts = text.split("-")
         if len(parts) < 3:
             raise InstrumentSyntaxError(f"{normalized!r}: expected {GRAMMAR}")
 
-        symbol, currency, sec_type_text = parts[0], parts[1], parts[2]
-        try:
-            sec_type = SecType(sec_type_text)
-        except ValueError:
-            known = ", ".join(s.value for s in SecType)
-            raise InstrumentSyntaxError(
-                f"{normalized!r}: unknown security type {sec_type_text!r}; expected one of {known}"
-            ) from None
-
-        tail = parts[3:]
-        expiry, strike, right = "", 0.0, ""
-        if sec_type in STRIKED:
-            if len(tail) != 3:
-                raise InstrumentSyntaxError(
-                    f"{normalized!r}: {sec_type.value} needs EXPIRY-STRIKE-RIGHT"
-                )
-            expiry, right = tail[0], tail[2]
-            strike = _parse_strike(tail[1], normalized)
-        elif sec_type in DATED:
-            if len(tail) != 1:
-                raise InstrumentSyntaxError(f"{normalized!r}: {sec_type.value} needs EXPIRY")
-            expiry = tail[0]
-        elif tail:
-            raise InstrumentSyntaxError(
-                f"{normalized!r}: {sec_type.value} takes no trailing fields"
-            )
-
+        symbol, currency = parts[0], parts[1]
+        sec_type = _sec_type_of(parts[2], normalized)
+        expiry, strike, right = _tail_fields(sec_type, parts[3:], normalized)
         return cls(
             sec_type=sec_type,
             symbol=symbol,

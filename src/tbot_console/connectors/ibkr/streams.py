@@ -5,7 +5,7 @@ import math
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal
 
 from ib_async import Contract, Ticker
 from ib_async.objects import (
@@ -27,8 +27,6 @@ from tbot_console.connectors.ibkr.models import (
     TapeQuote,
 )
 from tbot_console.core.exceptions import ExchangeConnectionError, ExchangeRequestError
-
-T = TypeVar("T")
 
 TapeKind = Literal["trades", "quotes"]
 StreamCallback = Callable[[Any], Any]
@@ -171,26 +169,25 @@ def print_from_tick(symbol: str, tick: TickByTickAllLast | HistoricalTickLast) -
     )
 
 
-def quote_from_tick(symbol: str, tick: TickByTickBidAsk) -> TapeQuote:
+def _tape_quote(
+    symbol: str, moment: datetime, bid: float, ask: float, bid_size: float, ask_size: float
+) -> TapeQuote:
     return TapeQuote(
         symbol=symbol,
-        time=epoch(tick.time),
-        bid=_positive(tick.bidPrice),
-        ask=_positive(tick.askPrice),
-        bid_size=_amount(tick.bidSize),
-        ask_size=_amount(tick.askSize),
+        time=epoch(moment),
+        bid=_positive(bid),
+        ask=_positive(ask),
+        bid_size=_amount(bid_size),
+        ask_size=_amount(ask_size),
     )
+
+
+def quote_from_tick(symbol: str, tick: TickByTickBidAsk) -> TapeQuote:
+    return _tape_quote(symbol, tick.time, tick.bidPrice, tick.askPrice, tick.bidSize, tick.askSize)
 
 
 def quote_from_history(symbol: str, tick: HistoricalTickBidAsk) -> TapeQuote:
-    return TapeQuote(
-        symbol=symbol,
-        time=epoch(tick.time),
-        bid=_positive(tick.priceBid),
-        ask=_positive(tick.priceAsk),
-        bid_size=_amount(tick.sizeBid),
-        ask_size=_amount(tick.sizeAsk),
-    )
+    return _tape_quote(symbol, tick.time, tick.priceBid, tick.priceAsk, tick.sizeBid, tick.sizeAsk)
 
 
 def tape_from(kind: TapeKind, symbol: str, ticks: Iterable[Any]) -> list[TapePrint | TapeQuote]:
@@ -214,7 +211,7 @@ def second_of(moment: float) -> int:
     return math.floor(moment)
 
 
-def fresh_ticks(
+def fresh_ticks[T](
     page: Sequence[T], stamp: Callable[[T], float], boundary: int, seen: int
 ) -> list[T]:
     skipped, fresh = 0, []

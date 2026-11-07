@@ -86,7 +86,7 @@ def explain(error: ValidationError, where: str = "описание") -> str:
 
 def _read(path: Path, where: str) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text())
     except OSError as e:
         return Broken(where, f"файл не читается: {e}")
     except UnicodeDecodeError:
@@ -126,7 +126,7 @@ def load_root(base: Path) -> Registry:
             broken.append(parsed)
         else:
             units.append(parsed)
-    ports = Counter(port for unit in units for port in _ports(unit))
+    ports = Counter([*_ports(unit) for unit in units])
     clashing = {port for port, count in ports.items() if count > 1}
     accepted: list[UnitManifest] = []
     for unit in units:

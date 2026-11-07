@@ -130,6 +130,41 @@ class TestProxy:
         assert forwarded.status == 404
         assert services.requests == []
 
+    @pytest.mark.asyncio
+    async def test_a_transport_failure_is_a_bad_gateway(self, services):
+        services.default = httpx.ReadError("reset by peer")
+        forwarded = await proxy.forward("alpha", "GET", "logs", "", b"", None)
+        title = fixture_manifest("alpha")["title"]
+        assert forwarded.status == 502
+        assert json.loads(forwarded.content) == {
+            "detail": f"служба «{title}» ответила с ошибкой транспорта: reset by peer"
+        }
+        assert forwarded.headers == {"content-type": "application/json"}
+
+    @pytest.mark.asyncio
+    async def test_a_unit_without_a_service_is_not_forwarded(self, services, root):
+        monitor = {
+            "id": "gamma",
+            "kind": "monitor",
+            "title": "Гамма",
+            "processes": {"main": {"title": "Процесс", "module": "gamma.main"}},
+        }
+        write_manifest(root, monitor)
+        registry.forget()
+        forwarded = await proxy.forward("gamma", "GET", "logs", "", b"", None)
+        assert forwarded.status == 404
+        assert json.loads(forwarded.content) == {"detail": "консоль не знает службы «gamma»"}
+        assert services.requests == []
+
+    @pytest.mark.asyncio
+    async def test_a_bare_request_carries_no_body_and_no_content_type(self, services):
+        services.default = httpx.Response(204, headers={"x-other": "1", "etag": '"e"'})
+        forwarded = await proxy.forward("alpha", "GET", "logs", "", b"", None)
+        sent = services.requests[0]
+        assert "content-type" not in sent.headers and "content-length" not in sent.headers
+        assert str(sent.url) == "http://127.0.0.1:18601/api/alpha/logs"
+        assert (forwarded.status, forwarded.headers) == (204, {"etag": '"e"'})
+
     def test_a_segment_is_quoted_on_the_way_out(self):
         assert proxy.upstream_path("alpha", "history/a b") == "/api/alpha/history/a%20b"
 

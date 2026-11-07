@@ -32,7 +32,7 @@ def startup_imports(module: str, src: Path) -> str:
     main = src.joinpath(*module.split(".")) / "__main__.py"
     if not main.is_file():
         return "\n".join(lines)
-    for node in ast.walk(ast.parse(main.read_text(encoding="utf-8"))):
+    for node in ast.walk(ast.parse(main.read_text())):
         if isinstance(node, ast.Import):
             lines.append(ast.unparse(node))
         elif isinstance(node, ast.ImportFrom):
