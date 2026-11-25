@@ -234,6 +234,9 @@ unit-service contract on a demo app), `test_status.py`,
   and the Cyrillic audit line of `live_trading.log` is written, without `encoding=`; that is
   UTF-8 only because UTF-8 mode is the default from 3.15 (PEP 686). `requires-python >= 3.15` is
   load-bearing here; `scripts/*.py`, run by a bare `python3`, keep explicit encodings.
+- **The live-trading switch is keyed by unit id.** A renamed unit starts with its switch off,
+  and the old id's entry stays in `config/live_trading.json`: nothing carries it over or prunes
+  it.
 - **`ui-links` copies go stale.** Where a symlink fails (Windows without developer mode) the
   helpers are copies of the installed version; rerun `tbot ui-links` after every platform
   upgrade.

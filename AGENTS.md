@@ -54,6 +54,14 @@ meaning), no sycophancy.
   may be a unit repo with a live trading process. Run and test against
   `tests/fixtures/unit_repo` or throwaway copies (`TBOT_ROOT=tests/fixtures/unit_repo`), on spare
   ports (`TBOT_WEB_PORT`), never on the default 8420.
+- **Nothing live restarts without a yes.** Start, stop or restart nothing live (the console on
+  8420, a unit's processes) without the operator's explicit yes in chat.
+- **CI holds no secrets.** A test that needs keys stays in the consumer repo and runs against the
+  installed platform version ([docs/DECISIONS.md](docs/DECISIONS.md), 2026-09-26).
+- **Operator-facing text is Russian.** The console pages, `tbot` output and unit status texts
+  are the only text here the operator reads: Russian, plain language. All of it is selectable,
+  tooltips explain in plain words, each chart line has its own colour
+  ([docs/DECISIONS.md](docs/DECISIONS.md), 2026-07-29).
 - **No code comments.** Write clean code that reads itself.
 
 ## Repository map
@@ -76,7 +84,9 @@ The operator's Russian words for identifiers: [docs/GLOSSARY.md](docs/GLOSSARY.m
 
 - **Release:** bump `version` in `pyproject.toml` and the tag in
   `tests/fixtures/unit_repo/pyproject.toml` (a test pins them together), `uv lock`, commit,
-  `git tag vX.Y.Z`. Push `main` and the tag only when the operator asks.
+  `git tag vX.Y.Z` (lightweight, on the release or merge commit in `main`). Push `main` only when
+  the operator asks and the tag only on his «тегай», right after `main`. CI installs uv from
+  GitHub: a job that fails with 504 while downloading is re-run with `gh run rerun <id> --failed`.
 - **Say what reaches trading processes.** A release that changes `__init__.py`,
   `control/__init__.py`, `control/logs.py`, `core/` or `analysis/` changes code a running
   trading process imports; name those files in the release PR so unit repos can run their own

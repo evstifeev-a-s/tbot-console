@@ -464,6 +464,14 @@ reaches only the trading processes of a unit whose console switch is on
   still reports it once the request ends. On a new order 321 means IB never took it (status
   `ValidationError`): the trader raises `OrderRejectedError` for it, emits `rejected` and frees its
   `ref`.
+- **IB codes that read differently than they look.**
+  - 162 is a catch-all of the history service: besides "HMDS query returned no data" it carries
+    pacing violations, "TWS session is connected from a different IP" and "scanner subscription
+    cancelled". That is why `is_no_data` reads the message and not the code alone; every other
+    162 raises.
+  - 492 is a warning about OTC instruments on a scan, not a refusal: `scan` returns the rows it
+    got and raises with 492 only when no row came.
+  - 10141: the paper-trading disclaimer has not been accepted.
 - **ib_async keeps one pending answer per request name.** Open orders, positions, scanner
   parameters and depth exchanges are keyed by name, not by request id, so a second overlapping
   request would orphan the first caller's answer. The client runs each of them under its own lock
@@ -505,6 +513,10 @@ reaches only the trading processes of a unit whose console switch is on
 - **New named scan bound.** Add the field to `ScanRequest` and one line to the `optional` tuple in
   `build_subscription`; the sentinel handling then applies for free. Only worth it for a bound
   used repeatedly — `extra_filters` already reaches every tag IB has.
+- **Streaming bars** (`keepUpToDate=True` on `reqHistoricalDataAsync`) were left out on purpose
+  in 1.2.0: no second consumer wanted them, and they need a real-time data subscription. The
+  first reason no longer holds for IBKR code ([docs/DECISIONS.md](../../../../docs/DECISIONS.md),
+  2026-10-15); the subscription still does.
 - **Candle depth beyond one request.** Page `reqHistoricalDataAsync` backwards by passing
   `endDateTime` instead of `""`; `fetch_bars` deliberately makes a single call.
 

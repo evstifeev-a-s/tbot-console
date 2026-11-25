@@ -12,8 +12,10 @@ of connected repos. How things work lives in the module READMEs:
 - why things are decided the way they are: [DECISIONS.md](DECISIONS.md).
 
 **Home** is the unit repo that the `tbot` command and the console are run from: it holds
-`config/units/` and the git-ignored `config/workspace.json` and `config/live_trading.json`. Run every `tbot` command
-from home; `tbot up` refuses a folder without `config/units`.
+`config/units/` and the git-ignored `config/workspace.json` and `config/live_trading.json`. Run
+every `tbot` command from home (`tbot up` refuses a folder without `config/units`) as
+`uv run --no-sync tbot …` or `.venv/bin/tbot …`: the console and home's units run from home's
+`.venv`, and plain `uv run` re-syncs that live `.venv` first.
 
 ## Procedures
 
@@ -30,17 +32,21 @@ started that way died when the app quit). What survives:
 
 launchd jobs cannot read `~/Documents` (TCC), which is why the repos live in `~/Projects`.
 
-1. From home, as a launchd job: `uv run --no-sync tbot up` (`--no-sync`: run the installed
-   `.venv` as is, without letting uv update it first). It starts every `autostart` process that
-   is not running, in home and every root, the console first, and prints the console's address
-   unless its start failed.
+1. From home, as a launchd job: `uv run --no-sync tbot up`. It starts every `autostart` process
+   that is not running, in home and every root, the console first, and prints the console's
+   address unless its start failed.
 2. Trading processes never autostart. Look at each one's state, then start each one explicitly
    through the launchd-started console, or as a launchd job running
-   `uv run tbot start <id>:<proc>`.
+   `uv run --no-sync tbot start <id>:<proc>`.
 
 Only the console: a launchd job running `uv run --no-sync tbot start console` from home; `nohup`
 from an app session does not survive the app quitting. A stopped console cannot be started from
 its own page.
+
+### Restart the console
+
+`.venv/bin/tbot restart console:web` or `uv run --no-sync tbot restart console:web` from home;
+from an app session, as a launchd job (above).
 
 ### Connect a unit repo (a root)
 
@@ -48,7 +54,7 @@ its own page.
    `.env`; the keys in it are the operator's to fill in.
 2. Add it to home's `config/workspace.json`: `{"roots": ["../<folder>"], "console_port": 8420}`.
    Roots are relative to home; `console_port` is optional.
-3. Within ~15 s its units appear on the home page and in `uv run tbot ps`, with no console
+3. Within ~15 s its units appear on the home page and in `tbot ps`, with no console
    restart. A refused root is one broken entry with the reason
    ([control/README.md](../src/tbot_console/control/README.md), "Home and roots").
 
@@ -64,8 +70,8 @@ its own page.
 
 ### Disconnect a root
 
-1. Stop its processes first: `uv run tbot stop <id>`, plus `uv run tbot stop <id>:<proc>` for a
-   process with its own `places_orders`, which a whole-unit command leaves alone.
+1. Stop its processes first: `tbot stop <id>`, plus `tbot stop <id>:<proc>` for a process with
+   its own `places_orders`, which a whole-unit command leaves alone.
 2. Remove the root from `roots`. Its units disappear within ~15 s; removing the root stops no
    process.
 
@@ -77,10 +83,11 @@ Under `tbot` the console always listens on loopback, on `console_port`, and take
 1. In home's `.env` set `TBOT_WEB_HOST` (for example `0.0.0.0`), `TBOT_WEB_ALLOWED_HOSTS` (extra
    host names, comma-separated, for example the machine's LAN name), `TBOT_WEB_PORT` and
    `TBOT_WEB_TOKEN`. The token is required: the console refuses a non-loopback bind without it.
-2. Start the console by hand from home: `uv run tbot-web`. A hand start reads `.env` whole, except
-   the trading switches.
+2. Start the console by hand from home: `uv run --no-sync tbot-web`. A hand start reads `.env`
+   whole, except the trading switches.
 
-The page asks for the token once and keeps it in the browser.
+The page asks for the token once and keeps it in the browser. Whoever reaches it gets the start
+and stop buttons too (see Trust model).
 
 ### Start a new unit repo
 
@@ -100,4 +107,6 @@ The page asks for the token once and keeps it in the browser.
   `.env` included, and can connect to the broker themselves. The console only withholds other
   repos' keys: a process gets env files from its own repo only. Connect and update only reviewed
   code.
+- There is no read-only console mode: a shared screen, a tunnel or an exposed console hands
+  whoever sees it the start and stop buttons (checked 2026-11-13).
 - For a unit that only reads from IBKR, turn on "Read-Only API" in IB Gateway or TWS.
