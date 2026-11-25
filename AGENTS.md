@@ -11,15 +11,11 @@ this repository. `CLAUDE.md` is the only adapter (Claude Code does not read `AGE
 fork content into it. `scripts/check_docs.py` enforces that. Keep this file short: add a rule
 only if it is non-obvious, decision-changing and has no mechanical enforcement.
 
-## Working with the operator
+## Operator
 
-- **Reply in Russian.** Narrative prose for the operator (`README.md`, `docs/`) is Russian;
-  everything read next to code (identifiers, module `README.md`, commit messages, PR titles and
-  bodies, this file) is English.
-- **Be terse.** Lead with the answer or result. No filler, no emoji, no restating the request.
-- **Plain language, always.** Write for a smart person outside the field: gloss a term the first
-  time it appears, never send a bare formula or symbol, give every number its unit and meaning.
-- **No sycophancy.** If something is wrong or won't work, say so plainly.
+The operator reads nothing in this repository; whatever he needs goes into the chat reply.
+Reply in Russian, terse, plain language (gloss each term once, every number with its unit and
+meaning), no sycophancy.
 
 ## Non-negotiable rules
 
@@ -31,7 +27,7 @@ only if it is non-obvious, decision-changing and has no mechanical enforcement.
   module with its tests, in one platform release, with the consumer's import rename in the same
   bump PR. Nothing is added for a hypothetical consumer. The one exception is Interactive
   Brokers: everything that talks to IBKR is shared and lives in `connectors/ibkr/`, even while a
-  single unit needs it (owner's decision, 2026-10-15).
+  single unit needs it ([docs/DECISIONS.md](docs/DECISIONS.md), 2026-10-15).
 - **Compatibility within a major.** Unit repos rely on: the manifest schema
   (`control/manifest.py`), the unit service protocol (`/api/<id>/health`, `/api/<id>/status`
   UnitStatus `v: 1`), the UI contract (`web/static/js/units/contract.d.ts`), the helper files a
@@ -45,16 +41,27 @@ only if it is non-obvious, decision-changing and has no mechanical enforcement.
   Without the live-trading switch the trader reaches a paper account only. The switch
   (`IBKR_ALLOW_LIVE_TRADING`) is set by the console, per unit, for that unit's trading processes;
   it never comes from an env file or a manifest (`procs.FILE_DROPPED_KEYS`, `control/live.py`).
-  Owner's decision, 2026-10-15.
+  See [docs/DECISIONS.md](docs/DECISIONS.md), 2026-10-15.
+- **Order tests need the operator's word.** The integration tests that send orders
+  (`IBKR_PAPER_ORDER_TESTS=1`) run only with the operator's explicit permission in chat, and only
+  against a paper gateway.
 - **Process-control guarantees are a contract with live trading processes** that unit repos run
   under `tbot`: a trading process is never SIGKILLed, one operation per process at a time, pid +
-  create-time identity, detached sessions, an allowlisted child environment, loopback-only
-  services. They are listed in [control/README.md](src/tbot_console/control/README.md); never
+  kernel start-mark identity (`procs.start_mark`), detached sessions, an allowlisted child
+  environment, loopback-only services. They are listed in [control/README.md](src/tbot_console/control/README.md); never
   weaken one.
 - **Never run the console against a real unit repo on this machine.** A folder next to this one
   may be a unit repo with a live trading process. Run and test against
   `tests/fixtures/unit_repo` or throwaway copies (`TBOT_ROOT=tests/fixtures/unit_repo`), on spare
   ports (`TBOT_WEB_PORT`), never on the default 8420.
+- **Nothing live restarts without a yes.** Start, stop or restart nothing live (the console on
+  8420, a unit's processes) without the operator's explicit yes in chat.
+- **CI holds no secrets.** A test that needs keys stays in the consumer repo and runs against the
+  installed platform version ([docs/DECISIONS.md](docs/DECISIONS.md), 2026-09-26).
+- **Operator-facing text is Russian.** The console pages, `tbot` output and unit status texts
+  are the only text here the operator reads: Russian, plain language. All of it is selectable,
+  tooltips explain in plain words, each chart line has its own colour
+  ([docs/DECISIONS.md](docs/DECISIONS.md), 2026-07-29).
 - **No code comments.** Write clean code that reads itself.
 
 ## Repository map
@@ -69,14 +76,17 @@ only if it is non-obvious, decision-changing and has no mechanical enforcement.
 | `testing.py` | — | helpers for unit repos' contract tests: `loopback_client`, `manifest_problems`, `manifest_modules`, `startup_imports`, `imported_modules` |
 
 `tests/fixtures/unit_repo/` is a fictional unit repo (monitor `demo`) used by the tests and the
-Playwright smoke; it is also the template a new unit repo starts from. Operator guide (Russian):
-[docs/CONSOLE.md](docs/CONSOLE.md). Human landing page: [README.md](README.md).
+Playwright smoke; it is also the template a new unit repo starts from. Procedures and the trust
+model: [docs/CONSOLE.md](docs/CONSOLE.md). Decisions: [docs/DECISIONS.md](docs/DECISIONS.md).
+The operator's Russian words for identifiers: [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
 ## Releasing and co-developing
 
 - **Release:** bump `version` in `pyproject.toml` and the tag in
   `tests/fixtures/unit_repo/pyproject.toml` (a test pins them together), `uv lock`, commit,
-  `git tag vX.Y.Z`. Push `main` and the tag only when the operator asks.
+  `git tag vX.Y.Z` (lightweight, on the release or merge commit in `main`). Push `main` only when
+  the operator asks and the tag only on his «тегай», right after `main`. CI installs uv from
+  GitHub: a job that fails with 504 while downloading is re-run with `gh run rerun <id> --failed`.
 - **Say what reaches trading processes.** A release that changes `__init__.py`,
   `control/__init__.py`, `control/logs.py`, `core/` or `analysis/` changes code a running
   trading process imports; name those files in the release PR so unit repos can run their own
@@ -89,12 +99,15 @@ Playwright smoke; it is also the template a new unit repo starts from. Operator 
 
 ## Documentation
 
-Every fact lives in one place: module detail in the module `README.md` (English, house format:
-`# <Module> — <role>`, intro, `## Public API`, `## Modules`, `## Extension points`,
-`## What to reuse`), operator procedure in `docs/CONSOLE.md` (Russian). Update docs in the same
-commit when a change alters behaviour, a public contract, a command or a procedure; otherwise
-leave them alone. Do not edit this file, `scripts/check_docs.py`, hooks or
-`.github/workflows/*` as a side effect of another task — propose the change to the operator.
+Docs, commit messages, PR titles and bodies are English, written for agents. Every fact lives in
+one place: module detail in the module `README.md` (house format: `# <Module> — <role>`, intro,
+`## Public API`, `## Modules`, `## Gotchas` when there are any, `## Extension points`,
+`## What to reuse`), procedures in `docs/CONSOLE.md`, decisions in `docs/DECISIONS.md` (newest first:
+date, decision, why, the operator's words, what it supersedes, where it is enforced), the
+operator's Russian words for identifiers in `docs/GLOSSARY.md`. Update docs in the same commit
+when a change alters behaviour, a public contract, a command or a procedure; otherwise leave
+them alone. Do not edit this file, `scripts/check_docs.py`, hooks or `.github/workflows/*` as a
+side effect of another task — propose the change to the operator.
 
 `scripts/check_docs.py` is the gate: every module README is linked from the map above, relative
 links resolve, `CLAUDE.md` stays an adapter (pre-commit and `tests/unit/docs`). `--drift` warns

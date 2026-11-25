@@ -62,9 +62,9 @@ never loaded, that panel names the registry error instead. A registry error on f
 included) shows an empty home page with the error note; later errors keep the last good data.
 The platform ships no unit UI; `tests/fixtures/unit_repo/js/units/demo/` is the template.
 
-Operator usage — pages, buttons, `TBOT_WEB_TOKEN`/`TBOT_WEB_HOST`/`TBOT_WEB_PORT`/
-`TBOT_WEB_ALLOWED_HOSTS`, connecting a repo, the security model — is documented in
-[docs/CONSOLE.md](../../../docs/CONSOLE.md); this file is the architecture map.
+Procedures — exposing the console beyond loopback (`TBOT_WEB_TOKEN`/`TBOT_WEB_HOST`/
+`TBOT_WEB_PORT`/`TBOT_WEB_ALLOWED_HOSTS`), connecting a repo — and the trust model of connected
+repos are in [docs/CONSOLE.md](../../../docs/CONSOLE.md); this file is the architecture map.
 
 Security model in code: the shell refuses a request whose `Host` is not a loopback name or
 address (`control.service.is_loopback_host`: `localhost`, any `127.x`, `[::1]`), `TBOT_WEB_HOST` or
@@ -159,6 +159,12 @@ fictional trading unit and drives the badge, the switch and its confirmation in 
 so nothing is written to the fixture). Python tests: `tests/unit/web/` (`test_app` — the
 shell, its guards, its proxy and its import isolation; `test_control_api`); the asset route and
 operations on a unit from another repo are tested in `tests/unit/control/test_workspace.py`.
+
+## Gotchas
+
+- **The JS MIME type is pinned.** `app.py` registers `text/javascript` for `.js` and `.mjs`
+  because `mimetypes` reads the OS tables: on the Windows CI runner `.js` came back as
+  `application/javascript` and a unit-asset test failed (2026-10-07).
 
 ## Extension points
 
