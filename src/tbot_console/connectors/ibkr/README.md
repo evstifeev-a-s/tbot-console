@@ -429,6 +429,11 @@ reaches only the trading processes of a unit whose console switch is on
 - **Market data defaults to delayed.** Without a data subscription IB returns nothing at all on a
   live-feed request, so `market_data_type` defaults to `DELAYED_FROZEN` (IB type 4) and every
   `IBKRQuote` reports `delayed`. Set `IBKR_MARKET_DATA_TYPE=1` once subscriptions are in place.
+- **A paper account has no data subscriptions of its own.** It borrows the live account's: real
+  time on paper needs the US equities quote subscription on the live account and market-data
+  sharing to the paper account turned on in IBKR Account Management (the paper account's
+  settings). Depth needs its own subscription: Nasdaq TotalView for Nasdaq stocks (`@ISLAND`),
+  NYSE OpenBook for NYSE stocks.
 - **`whatToShow` is per security type.** FX rejects `TRADES` and must use `MIDPOINT`; everything
   else uses `TRADES`. Encoded in `WHAT_TO_SHOW` — extend it when adding a class.
 - **History is capped by bar size.** `duration_for` converts a bar count into an IB duration

@@ -39,8 +39,8 @@ setup), through `control.logs.configure_logging()`. Process control is POSIX-onl
 on Windows the package imports and type-checks, every process view reports `can: []` with a
 problem text, and every action refuses — there the console and unit services are started by hand.
 The console's HTTP side of this package is `web/control_api.py` (see
-[web/README.md](../web/README.md)); the operator guide is
-[docs/CONSOLE.md](../../../docs/CONSOLE.md).
+[web/README.md](../web/README.md)); the procedures (reboot, connecting and updating a root) are
+in [docs/CONSOLE.md](../../../docs/CONSOLE.md).
 
 ## Public API
 
@@ -223,6 +223,21 @@ the recorded start value and the restart note are in `test_ops.py`), `test_servi
 unit-service contract on a demo app), `test_status.py`,
 `test_logs.py`, `test_files.py`; plus `tests/unit/web/test_control_api.py`.
 
+## Gotchas
+
+- **CI does not exercise process control.** The Python jobs (pre-commit with mypy, and
+  `pytest tests/unit`) run on `windows-latest` only, where every process-control test skips.
+  macOS runs are local; the Linux-only tests in `test_procs.py` (`@linux`) run in no CI job.
+  mypy on Windows also means a POSIX-only call (`fcntl.flock`, …) type-checks only behind a
+  `sys.platform` check; a bare one failed CI on 2026-10-07.
+- **Text files rely on Python 3.15's UTF-8 default.** Manifests and JSON state files are read,
+  and the Cyrillic audit line of `live_trading.log` is written, without `encoding=`; that is
+  UTF-8 only because UTF-8 mode is the default from 3.15 (PEP 686). `requires-python >= 3.15` is
+  load-bearing here; `scripts/*.py`, run by a bare `python3`, keep explicit encodings.
+- **`ui-links` copies go stale.** Where a symlink fails (Windows without developer mode) the
+  helpers are copies of the installed version; rerun `tbot ui-links` after every platform
+  upgrade.
+
 ## Extension points
 
 - **New strategy or monitor:** a unit repo, never a change here. It holds the manifest
@@ -232,7 +247,7 @@ unit-service contract on a demo app), `test_status.py`,
   `/status` body from `control.status`; an optional UI `js/units/<ui>/index.js` exporting
   `createUnitUi(sdk)` (contract in `web/static/js/units/contract.d.ts`; a unit without `ui` gets
   only the processes page). The console picks it up from home or a `workspace.json` root. The
-  fixture `tests/fixtures/unit_repo/` is the template; the operator steps are in
+  fixture `tests/fixtures/unit_repo/` is the template; the steps are in
   [docs/CONSOLE.md](../../../docs/CONSOLE.md).
 - **A second instance of an existing strategy:** another manifest with its own `id`, `api.port`
   and config-path wiring key in `env` (`<PREFIX>_CONFIG_PATH`); tbot passes `TBOT_UNIT` and

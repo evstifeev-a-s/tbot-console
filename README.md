@@ -1,58 +1,40 @@
 # tbot-console
 
-Общая основа для стратегий и мониторов, которые живут в своих репозиториях:
+The platform that trading strategies and monitors kept in their own repositories (unit repos)
+run on:
 
-- **консоль** — веб-страница на этом компьютере (по умолчанию http://127.0.0.1:8420): все
-  стратегии и мониторы, их процессы, кнопки «Запустить» / «Остановить» и их собственные
-  страницы;
-- **команда `tbot`** — то же управление из терминала: `tbot up`, `tbot ps`, `tbot start`,
-  `tbot stop` и другие;
-- **несколько общих библиотек** — то, что нужно больше чем одному репозиторию, и всё, что
-  работает с брокером Interactive Brokers (список ниже).
+- `tbot-web`: a local web console (default `http://127.0.0.1:8420`) that lists every unit and its
+  processes, starts and stops them, and serves each unit's own pages;
+- `tbot`: the same process control from the command line;
+- shared libraries: the Interactive Brokers connector (market data and a paper-first trading
+  client), `core`, `analysis`, and contract-test helpers for unit repos.
 
-Сама консоль ни одной стратегии не знает. Репозиторий со стратегией или монитором (дальше —
-**репозиторий-стратегия**) кладёт свои описания в `config/units/`, свои страницы — в
-`js/units/<имя>/` и подключает `tbot-console` как зависимость. Консоль находит такой репозиторий
-сама — либо это папка, из которой её запустили, либо папка из списка в `config/workspace.json`;
-перезапускать консоль при этом не нужно.
+The package knows no concrete strategy. A unit repo declares its units in `config/units/*.json`,
+ships its pages in `js/units/<ui>/` and depends on this package by git tag.
 
-## Что внутри
+## Install
 
-| Где | Что это |
-|---|---|
-| `src/tbot_console/control/` | описания стратегий и мониторов, запуск и остановка процессов, команда `tbot` |
-| `src/tbot_console/web/` | консоль `tbot-web`: главная страница, управление процессами, пересылка запросов к службам стратегий, отдача их страниц |
-| `src/tbot_console/core/` | общие ошибки (`exceptions`) и общие перечисления (`types`, например «тестовая или боевая площадка») |
-| `src/tbot_console/analysis/` | модель свечи (`models`; свеча — цена открытия, максимум, минимум, закрытие и объём за отрезок времени: минуту, час, день) и устойчивые к выбросам расчёты (`robust`): средний истинный диапазон ATR (насколько цена обычно ходит за свечу), наклон по Тейлу–Сену (тренд, который не сбивают отдельные дикие свечи), разброс через медиану отклонений, ранговая корреляция Спирмена |
-| `src/tbot_console/connectors/ibkr/` | подключение к Interactive Brokers: чтение (котировки, свечи, цепочки опционов, сканеры — отбор бумаг по условиям на стороне брокера, стакан — все заявки на покупку и продажу по разным ценам, лента — каждая сделка по мере того, как она проходит) и торговый клиент, который отправляет заявки — по умолчанию только на бумажный (учебный) счёт |
-| `src/tbot_console/testing.py` | помощники для проверок в репозитории-стратегии: верны ли описания, загружаются ли их модули |
-| `tests/fixtures/unit_repo/` | вымышленный репозиторий с монитором «Демо» — на нём проверяется консоль, и с него удобно начинать новый репозиторий-стратегию |
+In a unit repo's `pyproject.toml` (use `tbot-console[ibkr]` for the IBKR connector):
 
-Заявки отправляет только торговый клиент Interactive Brokers из `connectors/ibkr/`; решает, что и
-когда покупать, по-прежнему сама стратегия в своём репозитории. Без переключателя «живая торговля»,
-который вы включаете для стратегии в консоли, её заявки уходят только на бумажный счёт
-([docs/CONSOLE.md](docs/CONSOLE.md), §7).
+```toml
+[project]
+dependencies = ["tbot-console"]
 
-## Как пользоваться
+[tool.uv.sources]
+tbot-console = { git = "https://github.com/evstifeev-a-s/tbot-console.git", tag = "vX.Y.Z" }
+```
 
-Обычно ничего отдельно устанавливать не нужно: репозиторий-стратегия сам тянет `tbot-console`
-нужной версии, и в его папке сразу работают `uv run tbot up` и остальные команды. Руководство
-оператора — запуск, кнопки, безопасность, как подключить новый репозиторий и как написать свой:
-[docs/CONSOLE.md](docs/CONSOLE.md).
+Then run `uv sync` and `uv run tbot ps` in that repo. Python 3.15; process control runs on macOS
+and Linux.
 
-Посмотреть консоль на примере без настоящих стратегий:
+To try the console on the bundled fictional unit repo:
 
 ```bash
-uv sync --all-groups --all-extras
+uv sync --locked --all-groups --all-extras
 TBOT_ROOT=tests/fixtures/unit_repo TBOT_WEB_PORT=18420 uv run tbot-web   # http://127.0.0.1:18420
 ```
 
-## Версии
+## More
 
-Номер версии — три числа, например `1.4.2`. Первое (мажорная версия) меняется, только когда
-репозиторию-стратегии нужны правки, чтобы работать дальше; консоль показывает репозиторий на
-другой мажорной версии красной карточкой. Второе — новые возможности без поломок, третье —
-исправления. Репозиторий-стратегия закрепляет версию меткой в своём `pyproject.toml`
-(`tag = "v1.0.0"`) и переходит на новую сам, когда готов.
-
-Для разработчиков и ИИ-агентов: [AGENTS.md](AGENTS.md).
+Rules, repository map and checks: [AGENTS.md](AGENTS.md). Procedures:
+[docs/CONSOLE.md](docs/CONSOLE.md).
