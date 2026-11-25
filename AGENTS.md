@@ -11,6 +11,12 @@ this repository. `CLAUDE.md` is the only adapter (Claude Code does not read `AGE
 fork content into it. `scripts/check_docs.py` enforces that. Keep this file short: add a rule
 only if it is non-obvious, decision-changing and has no mechanical enforcement.
 
+## Operator
+
+The operator reads nothing in this repository; whatever he needs goes into the chat reply.
+Reply in Russian, terse, plain language (gloss each term once, every number with its unit and
+meaning), no sycophancy.
+
 ## Non-negotiable rules
 
 - **Unit-agnostic.** No name, id, env prefix, port, module or page of a real unit repo appears
