@@ -47,8 +47,8 @@ meaning), no sycophancy.
   against a paper gateway.
 - **Process-control guarantees are a contract with live trading processes** that unit repos run
   under `tbot`: a trading process is never SIGKILLed, one operation per process at a time, pid +
-  create-time identity, detached sessions, an allowlisted child environment, loopback-only
-  services. They are listed in [control/README.md](src/tbot_console/control/README.md); never
+  kernel start-mark identity (`procs.start_mark`), detached sessions, an allowlisted child
+  environment, loopback-only services. They are listed in [control/README.md](src/tbot_console/control/README.md); never
   weaken one.
 - **Never run the console against a real unit repo on this machine.** A folder next to this one
   may be a unit repo with a live trading process. Run and test against
