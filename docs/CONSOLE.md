@@ -19,15 +19,28 @@ from home; `tbot up` refuses a folder without `config/units`.
 
 ### After a reboot
 
-1. From home: `uv run --no-sync tbot up` (`--no-sync`: run the installed `.venv` as is, without
-   letting uv update it first). It starts every `autostart` process that is not running, in home
-   and every root, the console first, and prints the console's address unless its start failed.
-2. Trading processes never autostart. Look at each one's state, then start it explicitly:
+Long-running processes (the console, bots) must be started by launchd. A process started from a
+Claude desktop-app session stays in the app's coalition and is killed when the app quits, even a
+`nohup` or `setsid` one reparented to ppid 1 (verified on macOS on 2026-11-25: every unit
+started that way died when the app quit). What survives:
+
+- a one-off LaunchAgent plist with `RunAtLoad` and `AbandonProcessGroup` set to true, with home
+  as its working directory, that runs the command;
+- a process started by a console that launchd started.
+
+launchd jobs cannot read `~/Documents` (TCC), which is why the repos live in `~/Projects`.
+
+1. From home, as a launchd job: `uv run --no-sync tbot up` (`--no-sync`: run the installed
+   `.venv` as is, without letting uv update it first). It starts every `autostart` process that
+   is not running, in home and every root, the console first, and prints the console's address
+   unless its start failed.
+2. Trading processes never autostart. Look at each one's state, then start each one explicitly
+   through the launchd-started console, or as a launchd job running
    `uv run tbot start <id>:<proc>`.
 
-Only the console: `nohup uv run --no-sync tbot start console`. `nohup` keeps the command alive
-if the terminal closes while it waits for the console to become ready. A stopped console cannot
-be started from its own page.
+Only the console: a launchd job running `uv run --no-sync tbot start console` from home; `nohup`
+from an app session does not survive the app quitting. A stopped console cannot be started from
+its own page.
 
 ### Connect a unit repo (a root)
 
