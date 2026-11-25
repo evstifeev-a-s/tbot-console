@@ -81,3 +81,37 @@ words, what it supersedes, and where it is enforced.
 - Supersedes: the growth rule (a module joins only when a second repo needs it), for
   `connectors/ibkr/` only.
 - Enforced in: `AGENTS.md` (growth rule).
+
+## 2026-09-26 — CI holds no secrets
+
+- Decision: the platform's CI runs without secrets: no `secrets.` in its workflows. A connector
+  whose tests need keys keeps those tests in the consumer repo, which runs them against the
+  installed platform version.
+- Why: the repo is shared, and anyone with write access can commit a workflow that prints the
+  repo's secrets.
+- Operator's words: «Получается, что мне нужно хранить секреты в репе, которой я делюсь?»
+- Supersedes: —
+- Enforced in: `.github/workflows/` (no secrets), `AGENTS.md`.
+
+## 2026-09-26 — The platform knows nothing about strategies
+
+- Decision: the console, process control and the shared modules live in a platform repo that
+  knows no strategy or monitor. Unit repos hold the algorithms and pages and depend on the
+  platform; a new unit is picked up with no platform change.
+- Why: a strategy repo can be shared on its own while the keys stay in the private unit repo.
+- Operator's words: «Общее репо ничего не должно знать про стратегии и чем они пользуются, а вот
+  стратегии про общее репо знают и зависят от него.»
+- Supersedes: one repo for every strategy and the console.
+- Enforced in: `AGENTS.md` (unit-agnostic), `tests/fixtures/unit_repo/`.
+
+## 2026-07-29 — Page conventions: selectable text, plain tooltips, a colour per chart line
+
+- Decision: on every console page, unit pages included, all text is selectable (tooltips too),
+  tooltips explain in plain language, and each line or price on a chart has its own colour.
+  Made on 2026-07-28 and 2026-07-29, before the platform split; it binds every unit UI.
+- Why: he copies values off the page, and tells chart lines apart by colour at a glance.
+- Operator's words: «Все надписи должны быть текстом, как основные, так и в подсказках, чтобы их
+  можно было выделить и копировать»; «удобнее же по цвету сразу понимать, что есть что»
+- Supersedes: —
+- Enforced in: `src/tbot_console/web/static/js/tooltip.js` and `css/app.css` (`.tip-bubble`
+  is `user-select: text`); chart colours are each unit UI's job.

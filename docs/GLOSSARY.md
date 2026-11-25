@@ -6,6 +6,7 @@ Words the operator uses in chat, mapped to identifiers. The console UI never say
 | Operator's word (Russian) | Identifier(s) | Meaning |
 |---|---|---|
 | юнит, юниты | `UnitManifest`, `config/units/<id>.json`, unit repo | one strategy or monitor instance declared in a unit repo |
+| тегай | `git tag vX.Y.Z` + `git push origin vX.Y.Z` | cut the release tag and push it, right after `main` |
 | тег консоли | `tag` of `tbot-console` in a unit repo's `[tool.uv.sources]` | the platform release a unit repo runs |
 | вкладка Консоль-Процессы | `#/console/processes`, `web/static/js/shell/processes.js` | the processes page of the built-in `console` unit |
 | торговый процесс | `unit.trades(proc)`, `places_orders` | a process that sends orders itself |
